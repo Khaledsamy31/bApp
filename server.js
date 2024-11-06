@@ -2,6 +2,8 @@ const express = require("express")
 const dotenv = require("dotenv")
 const morgan = require("morgan")
 const path = require("path")
+const cors = require('cors')
+const compression = require('compression')
 
 
 
@@ -26,8 +28,11 @@ dbConnection();
 
 //express app
 const app = express();
+app.use(cors())
+app.options('*', cors())
+app.use(compression())
 
-
+app.use(express.static(path.join(__dirname, "uploads")))
 
 //middleware before route
 app.use(express.json()) //to make parseing for data that comming from postman
