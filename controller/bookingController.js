@@ -177,6 +177,62 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
     }
 };
 
+// الحصول على اوقات العمل من خلال التاريخ
+exports.getAvailableTimesForSpecificDate = asyncHandler(async (req, res, next) => {
+    const { date } = req.body; // استلام التاريخ من Body
+
+    // التحقق من صحة المدخل
+    if (!date || isNaN(Date.parse(date))) {
+        return res.status(400).json({
+            message: "يرجى تقديم تاريخ صالح بصيغة YYYY-MM-DD."
+        });
+    }
+
+    const inputDate = new Date(`${date}T00:00:00Z`); // تحويل التاريخ إلى UTC
+    const dayOfWeek = inputDate.getDay(); // الحصول على رقم اليوم في الأسبوع (0 = الأحد, 6 = السبت)
+    const dateString = inputDate.toISOString().split("T")[0]; // تحويل التاريخ لصيغة YYYY-MM-DD
+
+    // جلب الإعدادات العامة
+    const settings = await settingsModel.findOne().lean();
+    const forbiddenDays = new Set(settings?.forbiddenDays || ["الجمعة"]);
+
+    // التحقق مما إذا كان اليوم محظورًا
+    const dayName = inputDate.toLocaleString("ar-EG", { weekday: "long" });
+    if (forbiddenDays.has(dayName)) {
+        return res.status(400).json({
+            message: `اليوم ${dayName} (${dateString}) هو يوم محظور للحجز.`
+        });
+    }
+
+    // التحقق مما إذا كان اليوم عطلة
+    const isHoliday = await holidayModel.findOne({ date: inputDate }).lean();
+    if (isHoliday) {
+        return res.status(400).json({
+            message: `اليوم ${dayName} (${dateString}) هو عطلة: ${isHoliday.description || "عطلة عامة"}.`
+        });
+    }
+
+    // جلب ساعات العمل لهذا اليوم
+    const workingHours = await WorkingHoursModel.findOne({ dayOfWeek }).lean();
+    if (!workingHours || workingHours.hours.length === 0) {
+        return res.status(404).json({
+            message: `لا توجد ساعات عمل محددة ليوم ${dayName} (${dateString}).`
+        });
+    }
+
+    // جلب الأوقات المحجوزة لليوم
+    const bookedTimes = await Booking.find({ date: inputDate, isCancelled: false }).select("time").lean();
+    const bookedTimesSet = new Set(bookedTimes.map(b => b.time));
+
+    // حساب الأوقات المتاحة
+    const availableTimes = workingHours.hours.filter(time => !bookedTimesSet.has(time));
+
+    return res.status(200).json({
+        date: dateString,
+        dayName,
+        availableTimes
+    });
+});
 
 
 

@@ -17,6 +17,7 @@ const {
     addWorkingHours,
     deleteWorkingHours,
     updateSpecificWorkingHour,
+    getAvailableTimesForSpecificDate,
 
     getBookingScope,
     updateBookingScope,
@@ -51,7 +52,7 @@ router.get("/available-times", getAvailableTimesForClient); // مسار جديد
 router.post("/working-hours", authService.protect, authService.allowedTo("admin", "manager"), addWorkingHours); // مسار جديد
 router.put("/working-hours",authService.protect, authService.allowedTo("admin", "manager"), updateSpecificWorkingHour); // مسار جديد
 router.delete("/delete-time",authService.protect, authService.allowedTo("admin", "manager"), deleteWorkingHours); // حذف ساعات العمل
-
+router.get("/working-hours/date", getAvailableTimesForSpecificDate);
 
 
 // مسارات قيمة bookingScope
