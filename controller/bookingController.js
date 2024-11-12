@@ -865,12 +865,40 @@ exports.getSpecificBookingByVisitorOrUser = asyncHandler(async (req, res, next) 
         return next(new ApiError("لا يوجد حجز يطابق المعايير المقدمة.", 404));
     }
 
+    // التحقق من انتهاء الحجز وتحديث `isExpired` إذا لزم الأمر
+    const currentTimeUTC = new Date();
+    const currentDateUTC = currentTimeUTC.toISOString().split("T")[0]; // تاريخ اليوم بصيغة YYYY-MM-DD
+    const currentTimeInMinutes = currentTimeUTC.getUTCHours() * 60 + currentTimeUTC.getUTCMinutes();
+
+    // تحويل وقت الحجز إلى دقائق
+    const [time, period] = booking.time.split(" ");
+    let [hours, minutes] = time.split(":").map(Number);
+    if (period === "PM" && hours < 12) hours += 12;
+    if (period === "AM" && hours === 12) hours = 0;
+
+    const bookingTimeInMinutes = hours * 60 + minutes;
+    const bookingDate = new Date(booking.date).toISOString().split("T")[0];
+
+    // تحقق من انتهاء الحجز
+    if (
+        bookingDate < currentDateUTC || 
+        (bookingDate === currentDateUTC && bookingTimeInMinutes < currentTimeInMinutes)
+    ) {
+        if (!booking.isExpired) { // تحديث فقط إذا لم يكن منتهيًا مسبقًا
+            booking.isExpired = true;
+            await booking.save(); // حفظ التحديث في قاعدة البيانات
+            console.log(`Booking ${bookingId} marked as expired.`);
+        }
+    }
+
     // إرسال الحجز في الرد
     res.status(200).json({
         status: "success",
         data: booking,
     });
 });
+
+
 
 
 
