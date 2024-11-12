@@ -249,10 +249,8 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
 
 // الحصول على اوقات العمل من خلال التاريخ
 exports.getAvailableTimesForSpecificDate = asyncHandler(async (req, res, next) => {
-    const { date } = req.query; // استلام التاريخ من Query Parameters
+    const { date } = req.body; // استلام التاريخ من Body
 
-    console.log("Received date:", date);
-    
     // التحقق من صحة المدخل
     if (!date || isNaN(Date.parse(date))) {
         return res.status(400).json({
@@ -309,7 +307,6 @@ exports.getAvailableTimesForSpecificDate = asyncHandler(async (req, res, next) =
 
 
 
-
 // حذف ساعات العمل
 const daysOfWeekMap = {
     "الأحد": 0,
@@ -330,29 +327,26 @@ exports.deleteWorkingHours = asyncHandler(async (req, res, next) => {
         return next(new ApiError(`Invalid dayOfWeek name: ${dayOfWeek}. Please provide a valid day name in Arabic.`, 400));
     }
 
-    // البحث عن ساعات العمل لهذا اليوم
-    const workingHours = await WorkingHoursModel.findOne({ dayOfWeek: dayOfWeekNumber });
-
-    if (!workingHours) {
-        return next(new ApiError(`No working hours found for day: ${dayOfWeek}`, 404));
-    }
-
-    // إذا تم تحديد وقت، حذف الوقت المحدد فقط
+    // إذا تم تحديد وقت، احذف الوقت فقط
     if (time) {
+        const workingHours = await WorkingHoursModel.findOne({ dayOfWeek: dayOfWeekNumber });
+
+        if (!workingHours) {
+            return next(new ApiError(`No working hours found for day: ${dayOfWeek}`, 404));
+        }
+
+        // حذف الوقت المحدد من الساعات
         workingHours.hours = workingHours.hours.filter(hour => hour !== time);
 
-        // حفظ التعديلات
+        // حفظ التعديلات حتى إذا كانت قائمة الساعات فارغة
         await workingHours.save();
+
         return res.status(200).json({ message: `Time ${time} removed from day ${dayOfWeek}` });
     }
 
-    // إذا لم يتم تحديد وقت، حذف جميع الأوقات لهذا اليوم
-    workingHours.hours = []; // تعيين القائمة إلى فارغة
-    await workingHours.save();
-
-    return res.status(200).json({ message: `All working hours removed for day ${dayOfWeek}` });
+    // إذا لم يتم تحديد وقت، ارجع خطأ حيث يجب تقديم وقت معين
+    return next(new ApiError("Please specify a time to delete.", 400));
 });
-
 
 // تحديث ساعات العمل
 exports.updateSpecificWorkingHour = asyncHandler(async (req, res, next) => {
@@ -446,92 +440,65 @@ exports.updateForbiddenDays = asyncHandler(async (req, res) => {
 
 // إنشاء حجز جديد
 exports.createBooking = asyncHandler(async (req, res, next) => {
-    const { userName, phoneNumber, date, time, type, notes, visitorId } = req.body;
-    const timezoneOffset = req.timezoneOffset || 0;
+    const { userName, phoneNumber, date, time, type, notes } = req.body;
+    const timezoneOffset = req.timezoneOffset;
+    console.log(`Booking request received:`, { userName, phoneNumber, date, time, type, notes });
 
-    // 1. تحديد الوقت الحالي UTC
-    const currentUTC = new Date();
-    currentUTC.setUTCHours(currentUTC.getUTCHours() + timezoneOffset);
-    console.log("Current UTC Time:", currentUTC.toISOString());
-
-    // 2. حساب التاريخ والوقت المطلوب للحجز
     const bookingDate = new Date(date);
     const [timePart, period] = time.split(" ");
     let [hours, minutes] = timePart.split(":").map(Number);
     if (period === "PM" && hours < 12) hours += 12;
     if (period === "AM" && hours === 12) hours = 0;
-    bookingDate.setUTCHours(hours, minutes, 0, 0);
-    console.log("Booking Date and Time:", bookingDate.toISOString());
+    bookingDate.setUTCHours(hours + timezoneOffset, minutes, 0, 0);
+    console.log(`Calculated booking date and time in UTC:`, bookingDate);
 
-    // 3. التحقق من أن الحجز الجديد أكبر من الوقت الحالي UTC
-    if (bookingDate <= currentUTC) {
-        console.error("Booking date is in the past or current time.");
-        return next(new ApiError("لا يمكن حجز موعد في الماضي أو الوقت الحالي. يرجى اختيار موعد مستقبلي.", 400));
+    // تحقق من أن تاريخ ووقت الحجز أكبر من الوقت الحالي
+    const currentTime = new Date();
+    currentTime.setUTCHours(currentTime.getUTCHours() + timezoneOffset);
+    if (bookingDate < currentTime) {
+        return next(new ApiError("لا يمكن حجز موعد في الماضي. يرجى اختيار موعد مستقبلي.", 400));
     }
 
-    // 4. التحقق من الحجوزات السابقة إذا كان الزائر موجودًا
-    const filter = visitorId
-        ? { visitorId, isCancelled: false } // البحث عن الحجوزات إذا كان visitorId موجودًا
-        : null; // لا يوجد حجز سابق
-
-    let latestBooking = null;
-
-    if (filter) {
-        latestBooking = await Booking.findOne(filter).sort({ date: -1, time: -1 }).lean();
-    }
-
-    console.log("Latest Booking:", latestBooking);
-
-    if (latestBooking) {
-        // تحويل التاريخ والوقت للحجز الأخير إلى UTC
-        const lastBookingDate = new Date(latestBooking.date);
-        const [lastTimePart, lastPeriod] = latestBooking.time.split(" ");
-        let [lastHours, lastMinutes] = lastTimePart.split(":").map(Number);
-        if (lastPeriod === "PM" && lastHours < 12) lastHours += 12;
-        if (lastPeriod === "AM" && lastHours === 12) lastHours = 0;
-        lastBookingDate.setUTCHours(lastHours, lastMinutes, 0, 0);
-        console.log("Last Booking Date and Time:", lastBookingDate.toISOString());
-
-        // السماح بحجز جديد في نفس اليوم طالما أن الوقت الجديد أكبر من وقت الحجز السابق
-        if (lastBookingDate.toDateString() === bookingDate.toDateString() && bookingDate <= lastBookingDate) {
-            console.error("Booking date is before or equal to the latest booking on the same day.");
-            return next(new ApiError("لا يمكن حجز موعد جديد قبل أو بنفس وقت الحجز السابق في نفس اليوم.", 400));
-        }
-    }
-
-    // 5. التحقق من الأوقات المتاحة
+    // التحقق من الأوقات المتاحة
     const dayOfWeek = bookingDate.getUTCDay();
     const availableTimes = await getAvailableTimesByDayOfWeek(date, dayOfWeek, timezoneOffset);
-    console.log("Available Times for Selected Date:", availableTimes);
+    console.error(`The requested time ${time} is not available for booking.`);
 
     if (!availableTimes.includes(time)) {
-        console.error("Time is not available for booking.");
         return next(new ApiError("الوقت المطلوب غير متاح للحجز. يرجى اختيار وقت آخر.", 400));
     }
 
-    // 6. إنشاء الحجز الجديد
-    const newBooking = await Booking.create({
-        visitorId: visitorId || uuidv4(), // إذا لم يكن هناك visitorId، يتم توليد واحد جديد
-        userId: req.user ? req.user._id : null,
+    // التحقق من وجود حجز سابق غير ملغى لنفس العميل
+    const existingBooking = await Booking.findOne({ phoneNumber, isCancelled: false });
+    if (existingBooking) {
+        const existingBookingDateTime = new Date(existingBooking.date);
+        const [existingTimePart, existingPeriod] = existingBooking.time.split(" ");
+        let [existingHours, existingMinutes] = existingTimePart.split(":").map(Number);
+        if (existingPeriod === "PM" && existingHours < 12) existingHours += 12;
+        if (existingPeriod === "AM" && existingHours === 12) existingHours = 0;
+        existingBookingDateTime.setUTCHours(existingHours + timezoneOffset, existingMinutes, 0, 0);
+
+        if (bookingDate < existingBookingDateTime) {
+            return next(new ApiError("لا يمكنك حجز موعد جديد في وقت قبل حجزك القديم.", 400));
+        }
+    }
+
+    const visitorId = existingBooking ? existingBooking.visitorId : uuidv4();
+
+    // إنشاء الحجز الجديد في قاعدة البيانات
+    const booking = await Booking.create({
+        visitorId,
         userName,
         phoneNumber,
         date,
         time,
         type,
-        notes,
+        notes
     });
+    console.log(`Booking created successfully:`, booking);
 
-    console.log("New Booking Created:", newBooking);
-    res.status(201).json({
-        status:"Success",
-        message: "تم إنشاء الحجز بنجاح.",
-        data: newBooking,
-    });
+    res.status(201).json({ data: booking });
 });
-
-
-
-
 
 
 
@@ -797,120 +764,72 @@ exports.getAllBookings = asyncHandler(async (req, res) => {
 
 // الحصول على الحجوزات للمستخدم أو الزائر
 exports.getUserOrVisitorBookings = asyncHandler(async (req, res) => {
-    const { userId, visitorId, phoneNumber } = req.params; // قراءة من params
+    const { userId, visitorId, phoneNumber } = req.params;
 
-    // التحقق من وجود المدخلات
+    // التحقق من وجود مدخلات صالحة
     if (!userId && !visitorId && !phoneNumber) {
         return res.status(400).json({ message: 'يجب توفير userId أو visitorId أو phoneNumber' });
     }
 
-    // إنشاء شرط البحث
+    // إنشاء شرط البحث الأساسي
     const filter = {
-        ...(userId && { userId, isCancelled: false }),
-        ...(visitorId && { visitorId, isCancelled: false }),
-        ...(phoneNumber && { phoneNumber, isCancelled: false }),
+        ...(userId && { userId: userId, isCancelled: false }),
+        ...(visitorId && { visitorId: visitorId, isCancelled: false }),
+        ...(phoneNumber && { phoneNumber: phoneNumber, isCancelled: false }),
     };
 
+    // إضافة فلتر `isExpired` إذا تم تقديمه
+    if (req.query.isExpired !== undefined) {
+        const isExpired = req.query.isExpired === 'true'; // تحويل النص إلى قيمة Boolean
+        filter.isExpired = isExpired;
+    }
+
     // إعداد الصفحة والحد الأقصى للنتائج
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 25;
+    const page = parseInt(req.query.page, 10) || 1; // الصفحة المطلوبة، الافتراضي 1
+    const limit = parseInt(req.query.limit, 10) || 25; // عدد الحجوزات في كل صفحة، الافتراضي 25
     const skip = (page - 1) * limit;
 
-    // إعداد الفرز
-    const sortBy = req.query.sortBy || 'date';
-    const order = req.query.order === 'desc' ? -1 : 1;
+    // إعداد الفرز (افتراضيًا حسب التاريخ تصاعديًا)
+    const sortBy = req.query.sortBy || 'date'; // حقل الفرز
+    const order = req.query.order === 'desc' ? -1 : 1; // الترتيب
     const sort = { [sortBy]: order };
 
-    // البحث في قاعدة البيانات
+    // جلب الحجوزات باستخدام التصفح والفرز
     const [bookings, totalResults] = await Promise.all([
         Booking.find(filter).skip(skip).limit(limit).sort(sort),
         Booking.countDocuments(filter),
     ]);
 
-    // التحقق من وجود نتائج
+    // التحقق من وجود حجوزات
     if (bookings.length === 0) {
-        return res.status(404).json({ message: 'لا يوجد حجوزات لهذا العميل.' });
+        return res.status(404).json({ message: "لا يوجد حجوزات لهذا الزائر." });
     }
 
-    // إرسال النتائج
+    // تنسيق البيانات
+    const formatDateTime = (date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = date.getHours() % 12 || 12;
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const ampm = date.getHours() >= 12 ? 'PM' : 'AM';
+        return `${year}-${month}-${day} ${hours}:${minutes} ${ampm}`;
+    };
+
+    const formattedBookings = bookings.map((booking) => ({
+        ...booking.toObject(),
+        formattedDate: formatDateTime(new Date(booking.date)),
+    }));
+
+    // إرسال الرد
     res.status(200).json({
-        results: bookings.length,
+        results: formattedBookings.length,
         totalResults,
         page,
         totalPages: Math.ceil(totalResults / limit),
-        data: bookings,
+        data: formattedBookings,
     });
 });
-
-// الحصول على حجز معين لزائر او يوزر معين او الحصول على حجز بال id
-exports.getSpecificBookingByVisitorOrUser = asyncHandler(async (req, res, next) => {
-    const { bookingId, visitorId, userId } = req.params;
-
-    // التحقق من تقديم bookingId وواحد من visitorId أو userId
-    if (!bookingId || (!visitorId && !userId)) {
-        return res.status(400).json({
-            message: "يجب تقديم bookingId و visitorId أو userId.",
-        });
-    }
-
-    // إنشاء شروط البحث
-    const filter = { _id: bookingId };
-    if (visitorId) filter.visitorId = visitorId;
-    if (userId) filter.userId = userId;
-
-    // البحث عن الحجز
-    const booking = await Booking.findOne(filter);
-
-    if (!booking) {
-        return next(new ApiError("لا يوجد حجز يطابق المعايير المقدمة.", 404));
-    }
-
-    // إرسال الحجز في الرد
-    res.status(200).json({
-        status: "success",
-        data: booking,
-    });
-});
-
-
-
-
-
-exports.getAllVisitor = asyncHandler(async (req, res, next) => {
-    // البحث عن الحجوزات حيث لا يوجد userId ولكن يوجد visitorId
-    const visitors = await Booking.aggregate([
-        {
-            $match: {
-                userId: null, // الحجوزات التي لا ترتبط بمستخدم مسجل
-                visitorId: { $exists: true, $ne: null }, // يجب أن يكون visitorId موجودًا
-            },
-        },
-        {
-            $group: {
-                _id: "$visitorId", // تجميع بناءً على visitorId
-                visitorInfo: { $first: "$$ROOT" }, // الحصول على أول وثيقة تحتوي على تفاصيل الزائر
-            },
-        },
-        {
-            $project: {
-                _id: 0, // إزالة الحقل _id من الرد النهائي
-                visitorId: "$_id",
-                visitorInfo: {
-                    userName: "$visitorInfo.userName",
-                    phoneNumber: "$visitorInfo.phoneNumber",
-                },
-            },
-        },
-    ]);
-
-    // الرد بالزوار
-    res.status(200).json({
-        status: "success",
-        results: visitors.length,
-        data: visitors,
-    });
-});
-
 
 
 // الحصول على جميع الحجوزات الملغية

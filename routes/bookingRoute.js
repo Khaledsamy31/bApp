@@ -12,6 +12,7 @@ const {
     deleteHoliday,
     getAllHolidays, // مسار للحصول على العطلات
     getUserOrVisitorBookings,
+    getSpecificBookingByVisitorOrUser,
 
     getAvailableTimesForClient,
     addWorkingHours,
@@ -26,6 +27,8 @@ const {
     updateForbiddenDays,
 
     getCancelledAppointment,
+
+    getAllVisitor,
 
     getTimezoneOffset,
     updateTimezoneOffset
@@ -42,7 +45,18 @@ const router = express.Router();
 // مسار للحصول على الأيام المتاحة للحجز
 router.get("/available-days", getTimezoneOffsetMiddleware, getAvailableDaysWithTimes); // مسار للحصول على الأيام المتاحة للحجز
 
+// الحصول على جميع الزوار
+router.get("/visitors", getAllVisitor);
+
+// للحصول على الحجوزات بواسطة userId
+router.get('/user/:userId', getUserOrVisitorBookings);
+
+// للحصول على الحجوزات بواسطة visitorId
+router.get('/visitor/:visitorId', getUserOrVisitorBookings);
+
+// للحصول على الحجوزات بواسطة phoneNumber
 router.get('/guestPhone/:phoneNumber', getUserOrVisitorBookings);
+
 
 
 
@@ -53,6 +67,18 @@ router.post("/working-hours", authService.protect, authService.allowedTo("admin"
 router.put("/working-hours",authService.protect, authService.allowedTo("admin", "manager"), updateSpecificWorkingHour); // مسار جديد
 router.delete("/delete-time",authService.protect, authService.allowedTo("admin", "manager"), deleteWorkingHours); // حذف ساعات العمل
 router.get("/working-hours/date", getAvailableTimesForSpecificDate);
+
+
+// مسار للحصول على حجز معين بناءً على bookingId, userId, أو visitorId
+router.get(
+    "/visitorId/:visitorId/bookingId/:bookingId",
+    getSpecificBookingByVisitorOrUser
+);
+
+router.get(
+    "/userId/:userId/bookingId/:bookingId",
+    getSpecificBookingByVisitorOrUser
+);
 
 
 // مسارات قيمة bookingScope
@@ -68,7 +94,7 @@ router.route("/forbidden-day")
 
 
 // مسار لإنشاء حجز
-router.post("/",getTimezoneOffsetMiddleware, createBooking);
+router.post("/",authService.optionalProtect, getTimezoneOffsetMiddleware, createBooking);
 
 // مسار لإلغاء حجز
 router.delete("/:id", cancelBooking);

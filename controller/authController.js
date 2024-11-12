@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt');
 const sendEmail = require("../utils/sendEmail")
 const userModel = require("../models/userModel")
 const createToken = require("../utils/createToken")
+const Booking = require("../models/bookingModel"); 
 
 
 
@@ -31,20 +32,99 @@ exports.signup = asyncHandler ( async (req, res, next)=>{
 // @desc     login
 // @route    GET /api/v1/auth/login
 // @access   public
-exports.login = asyncHandler ( async (req, res, next)=>{
-    // 1- check if pw & email in the body (validation)
+exports.login = asyncHandler(async (req, res, next) => {
+    const { email, password, visitorId } = req.body;
 
-    // 2- check if user exist & check if pw is correct
-    const user = await userModel.findOne({ email: req.body.email})
-    if(!user || !(await bcrypt.compare(req.body.password, user.password))){
-        return next(new ApiError("Incorrect email or password", 401))
+    // 1- التحقق من وجود المستخدم بالبريد الإلكتروني وكلمة المرور
+    const user = await userModel.findOne({ email });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+        return next(new ApiError("Incorrect email or password", 401));
     }
 
-    // 3- generate token
-    const token = createToken(user._id)
-    // 4- send response to client side
-    res.status(200).json({data: user, token})
-})
+    // 2- التحقق من وجود `visitorId` وإلحاق الحجوزات بحساب المستخدم
+    let linkedBookingsCount = 0;
+    if (visitorId) {
+        const updatedBookings = await Booking.updateMany(
+            { visitorId, userId: null }, // الحجوزات التي تخص الزائر فقط
+            { userId: user._id } // ربطها بحساب المستخدم
+        );
+
+        // التحقق من عدد الحجوزات التي تم تعديلها
+        linkedBookingsCount = updatedBookings.modifiedCount || 0;
+        console.log(`Linked ${linkedBookingsCount} bookings to user ${user._id}`);
+    }
+
+    // 3- إنشاء التوكن JWT
+    const token = createToken(user._id);
+
+    // 4- إرسال الرد
+    res.status(200).json({
+        status: "success",
+        message: `Login successful. ${linkedBookingsCount} bookings have been linked to your account.`,
+        user: {
+            id: user._id,
+            name: user.name,
+            email: user.email,
+        },
+        token,
+    });
+});
+
+
+
+
+
+// @desc     to allow to visitor and user to create booking
+exports.optionalProtect = asyncHandler(async (req, res, next) => {
+    let token;
+
+    // 1- استخراج التوكن إذا كان موجودًا
+    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
+        token = req.headers.authorization.split(" ")[1];
+    }
+
+    // 2- إذا لم يكن التوكن موجودًا، السماح بالمرور كزائر
+    if (!token) {
+        return next(); // السماح للطلب بالمرور بدون تعيين req.user
+    }
+
+    try {
+        // 3- التحقق من صحة التوكن
+        const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+
+        // 4- التحقق من وجود المستخدم
+        const currentUser = await userModel.findById(decoded.userId);
+
+        if (!currentUser) {
+            console.log("User not found, continuing as guest.");
+            return next();
+        }
+
+        // 5- التحقق مما إذا كان المستخدم قد غيّر كلمة المرور بعد إنشاء التوكن
+        if (currentUser.passwordChangedAt) {
+            const passChangedTimestamp = parseInt(
+                currentUser.passwordChangedAt.getTime() / 1000,
+                10
+            );
+            if (passChangedTimestamp > decoded.iat) {
+                console.log("Password changed after token was issued, continuing as guest.");
+                return next();
+            }
+        }
+
+        // 6- إذا كان المستخدم نشطًا، تعيينه إلى `req.user`
+        if (!currentUser.active && req.route.path !== '/activeMe') {
+            console.log("User is not active, continuing as guest.");
+            return next();
+        }
+
+        req.user = currentUser; // تعيين المستخدم
+    } catch (err) {
+        console.log("Invalid token, continuing as guest.");
+    }
+
+    next(); // السماح بالمرور في جميع الحالات
+});
 
 // @desc     to make sure the user is logged in
 exports.protect = asyncHandler(async(req,res,next)=>{
