@@ -122,12 +122,17 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         const forbiddenDays = new Set(bookingSettings?.forbiddenDays || ["الجمعة"]);
 
         // التاريخ الحالي (UTC)
-        const todayUTC = new Date();
+        const nowUTC = new Date();
+        console.log("Current UTC Date/Time:", nowUTC);
+
+        // تحويل الوقت الحالي إلى دقائق منذ منتصف الليل UTC
+        const nowMinutesInUTC = nowUTC.getUTCHours() * 60 + nowUTC.getUTCMinutes();
+        console.log("Current UTC Time in Minutes:", nowMinutesInUTC);
 
         // إنشاء تواريخ الأيام التي سيتم التحقق منها
         const datesToCheck = Array.from({ length: bookingScope }, (_, i) => {
-            const date = new Date(todayUTC);
-            date.setUTCDate(todayUTC.getUTCDate() + i);
+            const date = new Date(nowUTC);
+            date.setUTCDate(nowUTC.getUTCDate() + i);
             return date;
         });
 
@@ -203,33 +208,37 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
 
                 const { booked, cancelled } = timesForDay;
 
-                // حساب الوقت الحالي بالدقائق (UTC)
-                const nowUTC = new Date();
-                const currentMinutesInUTC = nowUTC.getUTCHours() * 60 + nowUTC.getUTCMinutes();
-
-                const isTodayUTC = dateString === nowUTC.toISOString().split('T')[0];
-                console.log(`Processing date: ${dateString}, isTodayUTC: ${isTodayUTC}`);
+                console.log(`Processing date: ${dateString}`);
+                console.log("Working hours for day:", workingHoursForDay);
+                console.log("Booked times:", booked);
+                console.log("Cancelled times:", cancelled);
 
                 // فلترة الأوقات المتاحة
                 const availableTimes = workingHoursForDay.filter((time) => {
                     const timeInMinutesUTC = timeToMinutesUTC(time);
-
+                
+                    console.log(`Checking time: ${time} (${timeInMinutesUTC} minutes)`);
+                    console.log(`Current minutes in UTC: ${nowMinutesInUTC}`);
+                
                     // إذا كان الوقت محجوزًا وغير ملغى، استبعده
                     if (booked.has(time) && !cancelled.has(time)) {
-                        console.log(`Time ${time} is booked and not cancelled, excluding from available times.`);
+                        console.log(`Time ${time} is booked and not cancelled. Excluding.`);
                         return false;
                     }
-
-                    // إذا كان اليوم الحالي، تحقق من أن الوقت في المستقبل
-                    if (isTodayUTC) {
-                        if (timeInMinutesUTC <= currentMinutesInUTC) {
-                            console.log(`Time ${time} is in the past for today, excluding from available times.`);
+                
+                    // استبعاد الأوقات التي مضت إذا كان اليوم هو اليوم الحالي
+                    if (dateString === nowUTC.toISOString().split('T')[0]) {
+                        if (timeInMinutesUTC <= nowMinutesInUTC) {
+                            console.log(`Time ${time} is in the past or current time. Excluding.`);
                             return false;
                         }
                     }
-
+                
+                    // إذا كان الوقت صالحًا (ليس محجوزًا، وليس في الماضي)
                     return true;
                 });
+                
+                
 
                 console.log(`Available times for ${dateString}:`, availableTimes);
 
@@ -255,6 +264,7 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         return next(error);
     }
 };
+
 
 
 
