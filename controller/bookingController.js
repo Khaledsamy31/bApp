@@ -570,6 +570,23 @@ exports.createBooking = asyncHandler(async (req, res, next) => {
 
     
 // 5. التحقق من الأوقات المتاحة
+
+  // أولاً، البحث عن حجز ملغى لنفس التاريخ والوقت
+  let existingCancelledBooking = await Booking.findOne({ date, time, isCancelled: true }).lean();
+
+  if (existingCancelledBooking) {
+      // إعادة تفعيل الحجز الملغى
+      await Booking.updateOne({ _id: existingCancelledBooking._id }, { isCancelled: false });
+      const reactivatedBooking = await Booking.findById(existingCancelledBooking._id).lean();
+      console.log("Reactivated Booking:", reactivatedBooking);
+
+      return res.status(200).json({
+          status: "Success",
+          message: "تم إعادة تفعيل الحجز بنجاح.",
+          data: reactivatedBooking,
+      });
+  }
+  
 const bookedTimes = await Booking.find({ date, time }).lean();
 console.log("Booked Times for date and time:", bookedTimes);
 
