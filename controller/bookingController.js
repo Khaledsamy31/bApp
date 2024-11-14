@@ -160,10 +160,8 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
             WorkingHoursModel.find({}, 'dayOfWeek hours').lean(),
             Booking.find({
                 date: { $in: datesToCheckStrings },
-                isCancelled: false
-            })
-                .select('date time isCancelled')
-                .lean(),
+                // جلب جميع الحجوزات سواء كانت ملغاة أم لا
+            }).select('date time isCancelled').lean(),
         ]);
 
         console.timeEnd("DB queries");
@@ -182,9 +180,14 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
             if (!map[dateKey]) {
                 map[dateKey] = {
                     booked: new Set(),
+                    cancelled: new Set(),
                 };
             }
-            map[dateKey].booked.add(booking.time);
+            if (booking.isCancelled) {
+                map[dateKey].cancelled.add(booking.time);
+            } else {
+                map[dateKey].booked.add(booking.time);
+            }
             return map;
         }, {});
 
@@ -229,13 +232,14 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
                 }
 
                 const workingHoursForDay = workingHoursMap[dayOfWeek] || [];
-                const timesForDay = bookedTimesMap[dateString] || { booked: new Set() };
+                const timesForDay = bookedTimesMap[dateString] || { booked: new Set(), cancelled: new Set() };
 
-                const { booked } = timesForDay;
+                const { booked, cancelled } = timesForDay;
 
                 console.log(`Processing date: ${dateString}`);
                 console.log("Working hours for day:", workingHoursForDay);
                 console.log("Booked times:", booked);
+                console.log("Cancelled times:", cancelled);
 
                 // فلترة الأوقات المتاحة
                 const availableTimes = workingHoursForDay.filter((time) => {
@@ -249,9 +253,12 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
                     console.log(`Checking time: ${time} (${timeInMinutes} minutes)`);
                     console.log(`Current minutes in Local: ${nowMinutesInLocal}`);
 
-                    // إذا كان الوقت محجوزًا، استبعده
-                    if (booked && booked.has(time)) {
-                        console.log(`Time ${time} is booked. Excluding.`);
+                    const isBooked = booked.has(time);
+                    const isCancelled = cancelled.has(time);
+
+                    // إذا كان الوقت محجوزًا وغير ملغى، استبعده
+                    if (isBooked && !isCancelled) {
+                        console.log(`Time ${time} is booked and not cancelled. Excluding.`);
                         return false;
                     }
 
@@ -283,6 +290,11 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
 
         console.log("Final available days and times:", results);
 
+        // إذا تم استدعاء الدالة من دالة أخرى، نعيد النتائج فقط
+        if (req.fromFunction) {
+            return results;
+        }
+
         return res.status(200).json({
             results: results.length,
             data: results,
@@ -293,6 +305,7 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         return next(error);
     }
 };
+
 
 
 
