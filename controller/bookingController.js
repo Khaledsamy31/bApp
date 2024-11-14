@@ -121,22 +121,31 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         const bookingScope = bookingSettings?.bookingScope || 3;
         const forbiddenDays = new Set(bookingSettings?.forbiddenDays || ["الجمعة"]);
 
+        // الحصول على timezoneOffset من الطلب أو استخدام 0 كافتراضي
+        const timezoneOffset = req.timezoneOffset || 0;
+
         // التاريخ الحالي (UTC)
         const nowUTC = new Date();
         console.log("Current UTC Date/Time:", nowUTC);
 
-        // تحويل الوقت الحالي إلى دقائق منذ منتصف الليل UTC
-        const nowMinutesInUTC = nowUTC.getUTCHours() * 60 + nowUTC.getUTCMinutes();
-        console.log("Current UTC Time in Minutes:", nowMinutesInUTC);
+        // تحويل الوقت الحالي إلى الوقت المحلي
+        const nowLocal = new Date(nowUTC.getTime() + timezoneOffset * 60 * 60 * 1000);
+        console.log("Current Local Date/Time:", nowLocal);
 
-        // إنشاء تواريخ الأيام التي سيتم التحقق منها
+        // تحويل الوقت الحالي إلى دقائق منذ منتصف الليل Local
+        const nowMinutesInLocal = nowLocal.getHours() * 60 + nowLocal.getMinutes();
+        console.log("Current Local Time in Minutes:", nowMinutesInLocal);
+
+        // إنشاء تواريخ الأيام التي سيتم التحقق منها في الوقت المحلي
         const datesToCheck = Array.from({ length: bookingScope }, (_, i) => {
-            const date = new Date(nowUTC);
-            date.setUTCDate(nowUTC.getUTCDate() + i);
+            const date = new Date(nowLocal);
+            date.setDate(nowLocal.getDate() + i);
+            // إعادة ضبط الوقت إلى منتصف الليل
+            date.setHours(0, 0, 0, 0);
             return date;
         });
 
-        const datesToCheckStrings = datesToCheck.map(date => date.toISOString().split('T')[0]);
+        const datesToCheckStrings = datesToCheck.map(date => date.toLocaleDateString('en-CA'));
         console.log("Formatted Dates to Check:", datesToCheckStrings);
 
         console.time("DB queries");
@@ -155,14 +164,14 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         console.log("Raw Booked Times from DB:", bookedTimes);
 
         // معالجة البيانات
-        const holidayDates = new Set(holidays.map(holiday => holiday.date.toISOString().split('T')[0]));
+        const holidayDates = new Set(holidays.map(holiday => holiday.date.toLocaleDateString('en-CA')));
         const workingHoursMap = workingHours.reduce((map, wh) => {
             map[wh.dayOfWeek] = wh.hours;
             return map;
         }, {});
 
         const bookedTimesMap = bookedTimes.reduce((map, booking) => {
-            const dateKey = new Date(booking.date).toISOString().split('T')[0];
+            const dateKey = new Date(booking.date).toLocaleDateString('en-CA');
             if (!map[dateKey]) {
                 map[dateKey] = {
                     booked: new Set(),
@@ -182,7 +191,7 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         console.log("Booked Times Map:", bookedTimesMap);
 
         // دالة لتحويل الوقت إلى دقائق منذ منتصف الليل
-        const timeToMinutesUTC = (time) => {
+        const timeToMinutes = (time) => {
             const [timePart, period] = time.split(" ");
             let [hours, minutes] = timePart.split(":").map(Number);
             if (period.toUpperCase() === "PM" && hours < 12) hours += 12;
@@ -193,8 +202,8 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         // معالجة الأيام للتحقق من الأوقات المتاحة
         const filteredResults = await Promise.all(
             datesToCheck.map(async (currentDate) => {
-                const dayOfWeek = currentDate.getUTCDay();
-                const dateString = currentDate.toISOString().split('T')[0];
+                const dayOfWeek = currentDate.getDay(); // استخدم getDay() للتوقيت المحلي
+                const dateString = currentDate.toLocaleDateString('en-CA');
                 const dayName = currentDate.toLocaleString('ar-EG', { weekday: 'long' });
 
                 // استبعاد الأيام المحظورة والعطلات
@@ -215,30 +224,30 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
 
                 // فلترة الأوقات المتاحة
                 const availableTimes = workingHoursForDay.filter((time) => {
-                    const timeInMinutesUTC = timeToMinutesUTC(time);
-                
-                    console.log(`Checking time: ${time} (${timeInMinutesUTC} minutes)`);
-                    console.log(`Current minutes in UTC: ${nowMinutesInUTC}`);
-                
+                    const timeInMinutes = timeToMinutes(time);
+
+                    console.log(`Checking time: ${time} (${timeInMinutes} minutes)`);
+                    console.log(`Current minutes in Local: ${nowMinutesInLocal}`);
+
                     // إذا كان الوقت محجوزًا وغير ملغى، استبعده
                     if (booked.has(time) && !cancelled.has(time)) {
                         console.log(`Time ${time} is booked and not cancelled. Excluding.`);
                         return false;
                     }
-                
+
                     // استبعاد الأوقات التي مضت إذا كان اليوم هو اليوم الحالي
-                    if (dateString === nowUTC.toISOString().split('T')[0]) {
-                        if (timeInMinutesUTC <= nowMinutesInUTC) {
+                    const dateStringLocal = currentDate.toLocaleDateString('en-CA'); // تاريخ اليوم بالتوقيت المحلي
+
+                    if (dateStringLocal === nowLocal.toLocaleDateString('en-CA')) {
+                        if (timeInMinutes <= nowMinutesInLocal) {
                             console.log(`Time ${time} is in the past or current time. Excluding.`);
                             return false;
                         }
                     }
-                
+
                     // إذا كان الوقت صالحًا (ليس محجوزًا، وليس في الماضي)
                     return true;
                 });
-                
-                
 
                 console.log(`Available times for ${dateString}:`, availableTimes);
 
@@ -264,6 +273,7 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         return next(error);
     }
 };
+
 
 
 
