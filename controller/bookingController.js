@@ -121,8 +121,12 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         const bookingScope = bookingSettings?.bookingScope || 3;
         const forbiddenDays = new Set(bookingSettings?.forbiddenDays || ["الجمعة"]);
 
-        // الحصول على timezoneOffset من الطلب أو استخدام 0 كافتراضي
-        const timezoneOffset = req.timezoneOffset || 0;
+        // الحصول على timezoneOffset من الطلب
+        const timezoneOffset = req.timezoneOffset;
+        if (typeof timezoneOffset !== 'number') {
+            console.error("Timezone offset is not set. Please ensure that getTimezoneOffsetMiddleware is used.");
+            return next(new ApiError("Timezone offset is not set.", 500));
+        }
 
         // التاريخ الحالي (UTC)
         const nowUTC = new Date();
@@ -145,7 +149,7 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
             return date;
         });
 
-        const datesToCheckStrings = datesToCheck.map(date => date.toLocaleDateString('en-CA'));
+        const datesToCheckStrings = datesToCheck.map(date => date.toISOString().split('T')[0]);
         console.log("Formatted Dates to Check:", datesToCheckStrings);
 
         console.time("DB queries");
@@ -154,7 +158,10 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         const [holidays, workingHours, bookedTimes] = await Promise.all([
             holidayModel.find({ date: { $in: datesToCheckStrings } }).lean(),
             WorkingHoursModel.find({}, 'dayOfWeek hours').lean(),
-            Booking.find({ date: { $in: datesToCheckStrings } })
+            Booking.find({
+                date: { $in: datesToCheckStrings },
+                isCancelled: false
+            })
                 .select('date time isCancelled')
                 .lean(),
         ]);
@@ -164,25 +171,20 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         console.log("Raw Booked Times from DB:", bookedTimes);
 
         // معالجة البيانات
-        const holidayDates = new Set(holidays.map(holiday => holiday.date.toLocaleDateString('en-CA')));
+        const holidayDates = new Set(holidays.map(holiday => holiday.date.toISOString().split('T')[0]));
         const workingHoursMap = workingHours.reduce((map, wh) => {
             map[wh.dayOfWeek] = wh.hours;
             return map;
         }, {});
 
         const bookedTimesMap = bookedTimes.reduce((map, booking) => {
-            const dateKey = new Date(booking.date).toLocaleDateString('en-CA');
+            const dateKey = booking.date.toISOString().split('T')[0];
             if (!map[dateKey]) {
                 map[dateKey] = {
                     booked: new Set(),
-                    cancelled: new Set(),
                 };
             }
-            if (booking.isCancelled) {
-                map[dateKey].cancelled.add(booking.time);
-            } else {
-                map[dateKey].booked.add(booking.time);
-            }
+            map[dateKey].booked.add(booking.time);
             return map;
         }, {});
 
@@ -192,10 +194,24 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
 
         // دالة لتحويل الوقت إلى دقائق منذ منتصف الليل
         const timeToMinutes = (time) => {
-            const [timePart, period] = time.split(" ");
-            let [hours, minutes] = timePart.split(":").map(Number);
-            if (period.toUpperCase() === "PM" && hours < 12) hours += 12;
-            if (period.toUpperCase() === "AM" && hours === 12) hours = 0;
+            // Remove any extra spaces
+            time = time.trim();
+
+            // Extract hours, minutes, and period (AM/PM)
+            const match = time.match(/^(\d{1,2}):(\d{2})\s?(AM|PM)$/i);
+
+            if (!match) {
+                console.error(`Invalid time format: ${time}`);
+                return null;
+            }
+
+            let hours = parseInt(match[1], 10);
+            let minutes = parseInt(match[2], 10);
+            const period = match[3].toUpperCase();
+
+            if (period === "PM" && hours < 12) hours += 12;
+            if (period === "AM" && hours === 12) hours = 0;
+
             return hours * 60 + minutes;
         };
 
@@ -203,7 +219,7 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         const filteredResults = await Promise.all(
             datesToCheck.map(async (currentDate) => {
                 const dayOfWeek = currentDate.getDay(); // استخدم getDay() للتوقيت المحلي
-                const dateString = currentDate.toLocaleDateString('en-CA');
+                const dateString = currentDate.toISOString().split('T')[0];
                 const dayName = currentDate.toLocaleString('ar-EG', { weekday: 'long' });
 
                 // استبعاد الأيام المحظورة والعطلات
@@ -213,32 +229,36 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
                 }
 
                 const workingHoursForDay = workingHoursMap[dayOfWeek] || [];
-                const timesForDay = bookedTimesMap[dateString] || { booked: new Set(), cancelled: new Set() };
+                const timesForDay = bookedTimesMap[dateString] || { booked: new Set() };
 
-                const { booked, cancelled } = timesForDay;
+                const { booked } = timesForDay;
 
                 console.log(`Processing date: ${dateString}`);
                 console.log("Working hours for day:", workingHoursForDay);
                 console.log("Booked times:", booked);
-                console.log("Cancelled times:", cancelled);
 
                 // فلترة الأوقات المتاحة
                 const availableTimes = workingHoursForDay.filter((time) => {
                     const timeInMinutes = timeToMinutes(time);
 
+                    if (timeInMinutes === null) {
+                        console.log(`Skipping invalid time format: ${time}`);
+                        return false;
+                    }
+
                     console.log(`Checking time: ${time} (${timeInMinutes} minutes)`);
                     console.log(`Current minutes in Local: ${nowMinutesInLocal}`);
 
-                    // إذا كان الوقت محجوزًا وغير ملغى، استبعده
-                    if (booked.has(time) && !cancelled.has(time)) {
-                        console.log(`Time ${time} is booked and not cancelled. Excluding.`);
+                    // إذا كان الوقت محجوزًا، استبعده
+                    if (booked && booked.has(time)) {
+                        console.log(`Time ${time} is booked. Excluding.`);
                         return false;
                     }
 
                     // استبعاد الأوقات التي مضت إذا كان اليوم هو اليوم الحالي
-                    const dateStringLocal = currentDate.toLocaleDateString('en-CA'); // تاريخ اليوم بالتوقيت المحلي
+                    const dateStringLocal = currentDate.toISOString().split('T')[0]; // تاريخ اليوم
 
-                    if (dateStringLocal === nowLocal.toLocaleDateString('en-CA')) {
+                    if (dateStringLocal === nowLocal.toISOString().split('T')[0]) {
                         if (timeInMinutes <= nowMinutesInLocal) {
                             console.log(`Time ${time} is in the past or current time. Excluding.`);
                             return false;
