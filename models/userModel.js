@@ -43,11 +43,11 @@ const userSchema = new mongoose.Schema({
     },
     addresses: [
       {
-        id: {type: mongoose.Schema.Types.ObjectId},
-        alias: String,
-        details: String,
+        id: { type: mongoose.Schema.Types.ObjectId },
+        alias: { type: String, maxlength: [20, "Alias cannot exceed 20 characters"] },
+        details: { type: String, maxlength: [150, "Details cannot exceed 150 characters"] },
         phone: String,
-        city: String,
+        city: { type: String, maxlength: [20, "City name cannot exceed 20 characters"] },
         postalCode: String
       }
     ],

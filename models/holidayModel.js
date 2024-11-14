@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const holidaySchema = new mongoose.Schema({
     date: {
         type: Date,
-        required: true,
+        required: [true, "Date is required"],
         unique: true
     },
     description: {

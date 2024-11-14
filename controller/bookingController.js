@@ -449,6 +449,16 @@ exports.createBooking = asyncHandler(async (req, res, next) => {
     const { userName, phoneNumber, date, time, type, notes, visitorId } = req.body;
     const timezoneOffset = req.timezoneOffset || 0;
 
+        // التحقق من صحة النوع (type) مع إعدادات النظام
+        const settingsType = await settingsModel.findOne();
+        if (!settingsType) {
+            return next(new ApiError("Type not found. Please contact the administrator.", 500));
+        }
+    
+        if (!settingsType.types.includes(type)) {
+            return next(new ApiError(`Invalid type. Allowed types are: ${settingsType.types.join(", ")}`, 400));
+        }
+
     // 1. تحديد الوقت الحالي UTC
     const currentUTC = new Date();
     currentUTC.setUTCHours(currentUTC.getUTCHours() + timezoneOffset);
@@ -531,8 +541,157 @@ exports.createBooking = asyncHandler(async (req, res, next) => {
 
 
 
+// الحصول على قائمة الأنواع
+exports.getTypes = asyncHandler(async (req, res) => {
+    const settings = await settingsModel.findOne();
+    if (!settings) {
+        return res.status(404).json({ message: "Settings not found" });
+    }
+    res.status(200).json({ types: settings.types });
+});
+
+// اضافة نوع الحجز
+
+exports.addType = asyncHandler(async (req, res) => {
+    const { type } = req.body;
+
+    if (!type || typeof type !== "string" || type.length < 2 || type.length > 30) {
+        return res.status(400).json({ message: "Type must be a string between 2 and 30 characters" });
+    }
+
+    const settings = await settingsModel.findOne();
+    if (!settings) {
+        return res.status(404).json({ message: "Settings not found" });
+    }
+
+    if (settings.types.includes(type)) {
+        return res.status(400).json({ message: "Type already exists" });
+    }
+
+    settings.types.push(type);
+    await settings.save();
+
+    res.status(201).json({ message: "Type added successfully", types: settings.types });
+});
+
+// تعديل انواع الحجز
+exports.updateType = asyncHandler(async (req, res) => {
+    const { oldType, newType } = req.body;
+
+    if (!newType || typeof newType !== "string" || newType.length < 2 || newType.length > 30) {
+        return res.status(400).json({ message: "New type must be a string between 2 and 30 characters" });
+    }
+
+    const settings = await settingsModel.findOne();
+    if (!settings) {
+        return res.status(404).json({ message: "Settings not found" });
+    }
+
+    const index = settings.types.indexOf(oldType);
+    if (index === -1) {
+        return res.status(404).json({ message: "Old type not found" });
+    }
+
+    settings.types[index] = newType;
+    await settings.save();
+
+    res.status(200).json({ message: "Type updated successfully", types: settings.types });
+});
+
+// حذف نوع الحجز
+exports.deleteType = asyncHandler(async (req, res) => {
+    const { type } = req.body;
+
+    const settings = await settingsModel.findOne();
+    if (!settings) {
+        return res.status(404).json({ message: "Settings not found" });
+    }
+
+    const index = settings.types.indexOf(type);
+    if (index === -1) {
+        return res.status(404).json({ message: "Type not found" });
+    }
+
+    settings.types.splice(index, 1);
+    await settings.save();
+
+    res.status(200).json({ message: "Type deleted successfully", types: settings.types });
+});
 
 
+// الحصول على إعدادات النظام
+exports.getSettings = asyncHandler(async (req, res, next) => {
+    const settings = await settingsModel.findOne();
+    if (!settings) {
+        return res.status(404).json({ message: "Settings not found" });
+    }
+    res.status(200).json(settings);
+});
+
+// تحديث وضع الصيانة والرسالة
+exports.updateMaintenanceMode = asyncHandler(async (req, res, next) => {
+    const { maintenanceMode, maintenanceMessage } = req.body;
+
+    const updatedSettings = await settingsModel.findOneAndUpdate(
+        {},
+        { maintenanceMode, maintenanceMessage },
+        { new: true, upsert: true }
+    ).select("maintenanceMode maintenanceMessage");;
+
+    res.status(200).json({
+        message: "Maintenance mode updated successfully",
+        data: updatedSettings,
+    });
+});
+
+// تحديث نص الأدمن في فورم الحجز
+exports.updateAdminMessage = asyncHandler(async (req, res, next) => {
+    const { adminMessage } = req.body;
+
+    if (!adminMessage || adminMessage.length > 200) {
+        return res.status(400).json({
+            message: "Admin message must not exceed 200 characters",
+        });
+    }
+
+    const updatedSettings = await settingsModel.findOneAndUpdate(
+        {},
+        { adminMessage },
+        { new: true, upsert: true }
+    ).select("adminMessage");;
+
+    res.status(200).json({
+        message: "Admin message updated successfully",
+        data: updatedSettings,
+    });
+});
+
+// تحديث أرقام الهاتف والواتساب
+exports.updateContactNumbers = asyncHandler(async (req, res, next) => {
+    const { phoneNumber, whatsappNumber } = req.body;
+
+    // التحقق من صحة الأرقام
+    const phoneRegex = /^\d{11}$/;
+    if (
+        (phoneNumber && !phoneRegex.test(phoneNumber)) ||
+        (whatsappNumber && !phoneRegex.test(whatsappNumber))
+    ) {
+        return res.status(400).json({
+            message: "Phone number and WhatsApp number must contain exactly 11 digits",
+        });
+    }
+
+    const updatedSettings = await settingsModel.findOneAndUpdate(
+        {},
+        { phoneNumber, whatsappNumber },
+        { new: true, upsert: true }
+    ).select("phoneNumber whatsappNumber");;
+
+    res.status(200).json({
+        message: "Contact numbers updated successfully",
+        data: updatedSettings,
+    });
+});
 
 
 

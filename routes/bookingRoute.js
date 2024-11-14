@@ -20,6 +20,16 @@ const {
     updateSpecificWorkingHour,
     getAvailableTimesForSpecificDate,
 
+    getTypes,
+    addType,
+    updateType,
+    deleteType,
+
+    getSettings,
+    updateMaintenanceMode,
+    updateAdminMessage,
+    updateContactNumbers,
+
     getBookingScope,
     updateBookingScope,
 
@@ -41,6 +51,40 @@ const authService = require("../controller/authController")
 // const { protect, restrictTo } = require("../middlewares/authMiddleware"); // تأكد من وجود Middleware للتحقق من الصلاحيات
 
 const router = express.Router();
+
+
+
+// الحصول على إعدادات النظام
+router.get("/settings", getSettings);
+
+// تحديث وضع الصيانة
+router.put(
+    "/settings/maintenance",
+    authService.protect,
+    authService.allowedTo("admin"),
+    updateMaintenanceMode
+);
+
+// تحديث نص الأدمن
+router.put(
+    "/settings/admin-message",
+    authService.protect,
+    authService.allowedTo("admin", "manager"),
+    updateAdminMessage
+);
+
+// تحديث أرقام الهاتف والواتساب
+router.put(
+    "/settings/contact-numbers",
+    authService.protect,
+    authService.allowedTo("admin", "manager"),
+    updateContactNumbers
+);
+
+router.get("/types", getTypes); // الحصول على الأنواع
+router.post("/types", authService.protect, authService.allowedTo("admin","manager"), addType); // إضافة نوع
+router.put("/types", authService.protect, authService.allowedTo("admin", "manager"), updateType); // تعديل نوع
+router.delete("/types", authService.protect, authService.allowedTo("admin", "manager"), deleteType); // حذف نوع
 
 // مسار للحصول على الأيام المتاحة للحجز
 router.get("/available-days", getTimezoneOffsetMiddleware, getAvailableDaysWithTimes); // مسار للحصول على الأيام المتاحة للحجز
