@@ -165,9 +165,9 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
                 };
             }
             if (booking.isCancelled) {
-                map[dateKey].cancelled.add(booking.time); // إضافة الأوقات الملغاة
+                map[dateKey].cancelled.add(booking.time);
             } else {
-                map[dateKey].booked.add(booking.time); // إضافة الأوقات المحجوزة
+                map[dateKey].booked.add(booking.time);
             }
             return map;
         }, {});
@@ -185,84 +185,77 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
             return hours * 60 + minutes;
         };
 
-// معالجة الأيام للتحقق من الأوقات المتاحة
-const filteredResults = await Promise.all(
-    datesToCheck.map(async (currentDate) => {
-        const dayOfWeek = currentDate.getUTCDay();
-        const dateString = currentDate.toISOString().split('T')[0];
-        const dayName = currentDate.toLocaleString('ar-EG', { weekday: 'long' });
+        // معالجة الأيام للتحقق من الأوقات المتاحة
+        const filteredResults = await Promise.all(
+            datesToCheck.map(async (currentDate) => {
+                const dayOfWeek = currentDate.getUTCDay();
+                const dateString = currentDate.toISOString().split('T')[0];
+                const dayName = currentDate.toLocaleString('ar-EG', { weekday: 'long' });
 
-        // استبعاد الأيام المحظورة والعطلات
-        if (forbiddenDays.has(dayName) || holidayDates.has(dateString)) {
-            console.log(`Skipping day: ${dateString} (Reason: Forbidden or Holiday)`);
-            return null;
-        }
+                // استبعاد الأيام المحظورة والعطلات
+                if (forbiddenDays.has(dayName) || holidayDates.has(dateString)) {
+                    console.log(`Skipping day: ${dateString} (Reason: Forbidden or Holiday)`);
+                    return null;
+                }
 
-        const workingHoursForDay = workingHoursMap[dayOfWeek] || [];
-        const timesForDay = bookedTimesMap[dateString] || { booked: new Set(), cancelled: new Set() };
+                const workingHoursForDay = workingHoursMap[dayOfWeek] || [];
+                const timesForDay = bookedTimesMap[dateString] || { booked: new Set(), cancelled: new Set() };
 
-        const { booked, cancelled } = timesForDay;
+                const { booked, cancelled } = timesForDay;
 
-        // حساب الوقت الحالي بالدقائق (UTC)
-        const nowUTC = new Date();
-        const currentMinutesInUTC = nowUTC.getUTCHours() * 60 + nowUTC.getUTCMinutes();
+                // حساب الوقت الحالي بالدقائق (UTC)
+                const nowUTC = new Date();
+                const currentMinutesInUTC = nowUTC.getUTCHours() * 60 + nowUTC.getUTCMinutes();
 
-        const isTodayUTC = dateString === nowUTC.toISOString().split('T')[0];
-        console.log(`Processing date: ${dateString}, isTodayUTC: ${isTodayUTC}`);
+                const isTodayUTC = dateString === nowUTC.toISOString().split('T')[0];
+                console.log(`Processing date: ${dateString}, isTodayUTC: ${isTodayUTC}`);
 
-        // فلترة الأوقات المتاحة
-// فلترة الأوقات المتاحة
-const availableTimes = workingHoursForDay.filter((time) => {
-    const timeInMinutesUTC = timeToMinutesUTC(time);
+                // فلترة الأوقات المتاحة
+                const availableTimes = workingHoursForDay.filter((time) => {
+                    const timeInMinutesUTC = timeToMinutesUTC(time);
 
-    // إذا كان الوقت محجوزًا وغير ملغى، استبعده
-    if (booked.has(time) && (!cancelled.has(time) || booked.has(time) && cancelled.has(time))) {
-        console.log(`Time ${time} is booked and not cancelled, excluding from available times.`);
-        return false;
-    }
+                    // إذا كان الوقت محجوزًا وغير ملغى، استبعده
+                    if (booked.has(time) && !cancelled.has(time)) {
+                        console.log(`Time ${time} is booked and not cancelled, excluding from available times.`);
+                        return false;
+                    }
 
-    // إذا كان اليوم الحالي، تحقق من أن الوقت في المستقبل
-    if (isTodayUTC) {
-        if (timeInMinutesUTC <= currentMinutesInUTC) {
-            console.log(`Time ${time} is in the past for today, excluding from available times.`);
-            return false;
-        }
-    }
+                    // إذا كان اليوم الحالي، تحقق من أن الوقت في المستقبل
+                    if (isTodayUTC) {
+                        if (timeInMinutesUTC <= currentMinutesInUTC) {
+                            console.log(`Time ${time} is in the past for today, excluding from available times.`);
+                            return false;
+                        }
+                    }
 
-    // إذا كان الوقت غير محجوز وغير مستثنى، أضفه
-    return true;
-});
+                    return true;
+                });
 
+                console.log(`Available times for ${dateString}:`, availableTimes);
 
-console.log("Booked times for date:", booked);
-console.log("Cancelled times for date:", cancelled);
+                return {
+                    date: dateString,
+                    dayName,
+                    availableTimes,
+                };
+            })
+        );
 
+        const results = filteredResults.filter(day => day !== null);
 
+        console.log("Final available days and times:", results);
 
-        console.log(`Available times for ${dateString}:`, availableTimes);
-
-        return {
-            date: dateString,
-            dayName,
-            availableTimes,
-        };
-    })
-);
-
-const results = filteredResults.filter(day => day !== null);
-
-console.log("Final available days and times:", results);
-
-return res.status(200).json({
-    results: results.length,
-    data: results,
-});
+        return res.status(200).json({
+            results: results.length,
+            data: results,
+        });
 
     } catch (error) {
         console.error("Error in getAvailableDaysWithTimes:", error);
         return next(error);
     }
 };
+
 
 
 
