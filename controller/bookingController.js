@@ -140,8 +140,8 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         const [holidays, workingHours, bookedTimes] = await Promise.all([
             holidayModel.find({ date: { $in: datesToCheckStrings } }).lean(),
             WorkingHoursModel.find({}, 'dayOfWeek hours').lean(),
-            Booking.find({ date: { $in: datesToCheckStrings }, isCancelled: false })
-                .select('date time')
+            Booking.find({ date: { $in: datesToCheckStrings } })
+                .select('date time isCancelled')
                 .lean(),
         ]);
 
@@ -159,9 +159,16 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
         const bookedTimesMap = bookedTimes.reduce((map, booking) => {
             const dateKey = new Date(booking.date).toISOString().split('T')[0];
             if (!map[dateKey]) {
-                map[dateKey] = new Set();
+                map[dateKey] = {
+                    booked: new Set(),
+                    cancelled: new Set(),
+                };
             }
-            map[dateKey].add(booking.time);
+            if (booking.isCancelled) {
+                map[dateKey].cancelled.add(booking.time); // إضافة الأوقات الملغاة
+            } else {
+                map[dateKey].booked.add(booking.time); // إضافة الأوقات المحجوزة
+            }
             return map;
         }, {});
 
@@ -178,70 +185,87 @@ exports.getAvailableDaysWithTimes = async (req, res, next) => {
             return hours * 60 + minutes;
         };
 
-        // معالجة الأيام للتحقق من الأوقات المتاحة
-        const filteredResults = await Promise.all(
-            datesToCheck.map(async (currentDate) => {
-                const dayOfWeek = currentDate.getUTCDay();
-                const dateString = currentDate.toISOString().split('T')[0];
-                const dayName = currentDate.toLocaleString('ar-EG', { weekday: 'long' });
+// معالجة الأيام للتحقق من الأوقات المتاحة
+const filteredResults = await Promise.all(
+    datesToCheck.map(async (currentDate) => {
+        const dayOfWeek = currentDate.getUTCDay();
+        const dateString = currentDate.toISOString().split('T')[0];
+        const dayName = currentDate.toLocaleString('ar-EG', { weekday: 'long' });
 
-                // استبعاد الأيام المحظورة والعطلات
-                if (forbiddenDays.has(dayName) || holidayDates.has(dateString)) {
-                    console.log(`Skipping day: ${dateString} (Reason: Forbidden or Holiday)`);
-                    return null;
-                }
+        // استبعاد الأيام المحظورة والعطلات
+        if (forbiddenDays.has(dayName) || holidayDates.has(dateString)) {
+            console.log(`Skipping day: ${dateString} (Reason: Forbidden or Holiday)`);
+            return null;
+        }
 
-                const workingHoursForDay = workingHoursMap[dayOfWeek] || [];
-                const bookedTimesForDay = bookedTimesMap[dateString] || new Set();
+        const workingHoursForDay = workingHoursMap[dayOfWeek] || [];
+        const timesForDay = bookedTimesMap[dateString] || { booked: new Set(), cancelled: new Set() };
 
-                // حساب الوقت الحالي بالدقائق (UTC)
-                const nowUTC = new Date();
-                const currentMinutesInUTC = nowUTC.getUTCHours() * 60 + nowUTC.getUTCMinutes();
+        const { booked, cancelled } = timesForDay;
 
-                const isTodayUTC = dateString === nowUTC.toISOString().split('T')[0];
-                console.log(`Processing date: ${dateString}, isTodayUTC: ${isTodayUTC}`);
+        // حساب الوقت الحالي بالدقائق (UTC)
+        const nowUTC = new Date();
+        const currentMinutesInUTC = nowUTC.getUTCHours() * 60 + nowUTC.getUTCMinutes();
 
-                // فلترة الأوقات المتاحة
-                const availableTimes = workingHoursForDay.filter((time) => {
-                    const timeInMinutesUTC = timeToMinutesUTC(time);
-                
-                    // تحقق إذا كان اليوم الحالي
-                    const isTodayUTC = dateString === nowUTC.toISOString().split('T')[0];
-                
-                    // السماح بالأوقات إذا كان اليوم المطلوب ليس اليوم الحالي
-                    if (!isTodayUTC) {
-                        return !bookedTimesForDay.has(time);
-                    }
-                
-                    // إذا كان اليوم الحالي، تحقق من الوقت الحالي
-                    return timeInMinutesUTC > currentMinutesInUTC && !bookedTimesForDay.has(time);
-                });
-                
-                
+        const isTodayUTC = dateString === nowUTC.toISOString().split('T')[0];
+        console.log(`Processing date: ${dateString}, isTodayUTC: ${isTodayUTC}`);
 
-                console.log(`Available times for ${dateString}:`, availableTimes);
+        // فلترة الأوقات المتاحة
+// فلترة الأوقات المتاحة
+const availableTimes = workingHoursForDay.filter((time) => {
+    const timeInMinutesUTC = timeToMinutesUTC(time);
 
-                return {
-                    date: dateString,
-                    dayName,
-                    availableTimes,
-                };
-            })
-        );
+    // إذا كان الوقت محجوزًا وغير ملغى، استبعده
+    if (booked.has(time) && (!cancelled.has(time) || booked.has(time) && cancelled.has(time))) {
+        console.log(`Time ${time} is booked and not cancelled, excluding from available times.`);
+        return false;
+    }
 
-        const results = filteredResults.filter(day => day !== null);
+    // إذا كان اليوم الحالي، تحقق من أن الوقت في المستقبل
+    if (isTodayUTC) {
+        if (timeInMinutesUTC <= currentMinutesInUTC) {
+            console.log(`Time ${time} is in the past for today, excluding from available times.`);
+            return false;
+        }
+    }
 
-        console.log("Final available days and times:", results);
+    // إذا كان الوقت غير محجوز وغير مستثنى، أضفه
+    return true;
+});
 
-        return res.status(200).json({
-            results: results.length,
-            data: results,
-        });
+
+console.log("Booked times for date:", booked);
+console.log("Cancelled times for date:", cancelled);
+
+
+
+        console.log(`Available times for ${dateString}:`, availableTimes);
+
+        return {
+            date: dateString,
+            dayName,
+            availableTimes,
+        };
+    })
+);
+
+const results = filteredResults.filter(day => day !== null);
+
+console.log("Final available days and times:", results);
+
+return res.status(200).json({
+    results: results.length,
+    data: results,
+});
+
     } catch (error) {
         console.error("Error in getAvailableDaysWithTimes:", error);
         return next(error);
     }
 };
+
+
+
 
 
 
@@ -510,14 +534,38 @@ exports.createBooking = asyncHandler(async (req, res, next) => {
     }
 
     // 5. التحقق من الأوقات المتاحة
-    const dayOfWeek = bookingDate.getUTCDay();
-    const availableTimes = await getAvailableTimesByDayOfWeek(date, dayOfWeek, timezoneOffset);
-    console.log("Available Times for Selected Date:", availableTimes);
 
-    if (!availableTimes.includes(time)) {
-        console.error("Time is not available for booking.");
-        return next(new ApiError("الوقت المطلوب غير متاح للحجز. يرجى اختيار وقت آخر.", 400));
-    }
+    
+// 5. التحقق من الأوقات المتاحة
+const bookedTimes = await Booking.find({ date, time }).lean();
+console.log("Booked Times for date and time:", bookedTimes);
+
+// السماح بالحجز إذا لم يكن هناك حجوزات غير ملغاة
+const isTimeAvailable = bookedTimes.every((booking) => booking.isCancelled);
+
+console.log("Final Time Availability Check:", {
+    allCancelled: bookedTimes.every((booking) => booking.isCancelled),
+    noBookings: bookedTimes.length === 0,
+    isTimeAvailable,
+});
+
+// التحقق من توفر الوقت
+if (!isTimeAvailable) {
+    console.error("Time is not available for booking.");
+    return next(new ApiError("الوقت المطلوب غير متاح للحجز. يرجى اختيار وقت آخر.", 400));
+}
+
+
+
+// التحقق من الأوقات المتاحة بناءً على ساعات العمل
+const dayOfWeek = bookingDate.getUTCDay();
+const availableTimes = await getAvailableTimesByDayOfWeek(date, dayOfWeek, timezoneOffset);
+
+if (!availableTimes.includes(time)) {
+    console.error("Time is not available based on working hours.");
+    return next(new ApiError("الوقت المطلوب غير متاح للحجز. يرجى اختيار وقت آخر.", 400));
+}
+
 
     // 6. إنشاء الحجز الجديد
     const newBooking = await Booking.create({
@@ -907,6 +955,8 @@ exports.getAllBookings = asyncHandler(async (req, res) => {
             ) {
                 booking.isExpired = true;
                 await booking.save();
+                // to ignore validation on old data when get it
+                // await booking.save({ validateBeforeSave: false });
             }
 
             return {
