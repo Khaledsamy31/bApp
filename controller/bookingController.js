@@ -571,22 +571,60 @@ exports.createBooking = asyncHandler(async (req, res, next) => {
     
 // 5. التحقق من الأوقات المتاحة
 
+// أولاً، البحث عن حجز ملغى لنفس التاريخ والوقت وللزائر أو المستخدم نفسه
+
+let existingCancelledBooking = null; // تعريف المتغير هنا
+
+if (existingCancelledBooking) {
+    // إعادة تفعيل الحجز الملغى
+    existingCancelledBooking.isCancelled = false;
+
+    // تحديث الحقول الأخرى إذا تم إرسالها
+    if (req.body.userName) {
+        existingCancelledBooking.userName = req.body.userName;
+    }
+
+    if (req.body.phoneNumber) {
+        existingCancelledBooking.phoneNumber = req.body.phoneNumber;
+    }
+
+    if (req.body.type) {
+        existingCancelledBooking.type = req.body.type;
+    }
+
+    if (req.body.notes) {
+        existingCancelledBooking.notes = req.body.notes;
+    }
+
+    await existingCancelledBooking.save(); // حفظ التعديلات في قاعدة البيانات
+
+    console.log("Reactivated Booking with updates:", existingCancelledBooking);
+
+    return res.status(200).json({
+        status: "Success",
+        message: "تم إعادة تفعيل الحجز بنجاح.",
+        data: existingCancelledBooking,
+        isOldBooked: true,
+    });
+}
+
+
   // أولاً، البحث عن حجز ملغى لنفس التاريخ والوقت
-  let existingCancelledBooking = await Booking.findOne({ date, time, isCancelled: true }).lean();
+//   let existingCancelledBooking = await Booking.findOne({ date, time, isCancelled: true }).lean();
 
-  if (existingCancelledBooking) {
-      // إعادة تفعيل الحجز الملغى
-      await Booking.updateOne({ _id: existingCancelledBooking._id }, { isCancelled: false });
-      const reactivatedBooking = await Booking.findById(existingCancelledBooking._id).lean();
-      console.log("Reactivated Booking:", reactivatedBooking);
+//   if (existingCancelledBooking) {
+//       // إعادة تفعيل الحجز الملغى
+//       await Booking.updateOne({ _id: existingCancelledBooking._id }, { isCancelled: false });
+//       const reactivatedBooking = await Booking.findById(existingCancelledBooking._id).lean();
+//       console.log("Reactivated Booking:", reactivatedBooking);
 
-      return res.status(200).json({
-          status: "Success",
-          message: "تم إعادة تفعيل الحجز بنجاح.",
-          data: reactivatedBooking,
-      });
-  }
-  
+//       return res.status(200).json({
+//           status: "Success",
+//           message: "تم إعادة تفعيل الحجز بنجاح.",
+//           data: reactivatedBooking,
+//       });
+//   }
+
 const bookedTimes = await Booking.find({ date, time }).lean();
 console.log("Booked Times for date and time:", bookedTimes);
 
