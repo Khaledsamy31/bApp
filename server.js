@@ -4,6 +4,10 @@ const morgan = require("morgan")
 const path = require("path")
 const cors = require('cors')
 const compression = require('compression')
+// استدعاء ملف المهام المجدولة
+require("./tasks/bookingExpiredFunction"); // <-- هذا السطر
+require('./tasks/updateStats');
+require('./controller/statisticsController');
 
 
 

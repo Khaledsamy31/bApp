@@ -52,7 +52,7 @@ const settingsSchema = new mongoose.Schema({
     maintenanceMessage: {
         type: String,
         default: "النظام تحت الصيانة حاليًا. سنعود قريبًا، نعتذر عن الإزعاج.", // رسالة افتراضية
-        maxlength: [200, "Maintenance message must not exceed 200 characters"], // الحد الأقصى
+        maxlength: [70, "Maintenance message must not exceed 70 characters"], // الحد الأقصى
     },
     adminMessage: {
         type: String,

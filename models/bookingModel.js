@@ -9,7 +9,9 @@
       },
     userId: {
       type: mongoose.Schema.Types.ObjectId,
-        ref: "User" 
+        ref: "User" ,
+         index: true
+        
       },
     userName: { 
       type: String,
@@ -27,7 +29,8 @@
       },
     date: { 
       type: Date, 
-      required: [true, "Date is required"] 
+      required: [true, "Date is required"] ,
+       index: true
     },
 
     time: {
@@ -39,12 +42,20 @@
         required: [true, "Type is required"],
         },
 
-    notes: { 
-      type: String,
-      maxlength: [200, "Notes must not exceed 200 characters"], // الحد الأقصى
-      },
-    isCancelled: { type: Boolean, default: false },
-    isExpired: { type: Boolean, default: false },
+        notes: { 
+          type: String,
+          maxlength: [90, "Notes must not exceed 90 characters"], // التحقق من الطول
+          validate: {
+            validator: function(value) {
+              // تحقق من عدد الكلمات
+              return !value || value.split(" ").length <= 15;
+            },
+            message: "Notes must not exceed 15 words"
+          }
+        },
+        
+    isCancelled: { type: Boolean, default: false, index: true },
+    isExpired: { type: Boolean, default: false, index: true },
   }, { timestamps: true });
 
   module.exports = mongoose.model("Booking", bookingSchema);

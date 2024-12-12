@@ -89,27 +89,85 @@ exports.addWorkingHours = asyncHandler(async (req, res, next) => {
     console.log("Received data:", { dayOfWeek, hours });
 
     const timeFormatRegex = /^(0?[1-9]|1[0-2]):[0-5][0-9]\s?(AM|PM)$/i;
-    const validHours = hours.filter(time => timeFormatRegex.test(time));
 
-    if (validHours.length !== hours.length) {
+    // إزالة التكرار من الأوقات المرسلة والتحقق من الصيغة
+    const uniqueHours = [...new Set(hours)];
+    const validHours = uniqueHours.filter(time => timeFormatRegex.test(time));
+
+    if (validHours.length !== uniqueHours.length) {
         return res.status(400).json({
-            message: "بعض الأوقات غير صالحة. يرجى إدخال الأوقات بتنسيق صحيح HH:MM AM/PM."
+            message: "بعض الأوقات مكررة أو غير صالحة. يرجى إدخال الأوقات بتنسيق صحيح HH:MM AM/PM."
         });
     }
 
+    // البحث عن الساعات الحالية لليوم المحدد
     let existingHours = await WorkingHoursModel.findOne({ dayOfWeek });
     console.log("الساعات الموجودة ليوم:", dayOfWeek, existingHours ? existingHours.hours : "لا توجد ساعات");
 
     if (existingHours) {
-        existingHours.hours = [...new Set([...existingHours.hours, ...validHours])];
+        // دمج الساعات الحالية مع الجديدة مع إزالة التكرار مع تمييز AM و PM
+        const combinedHours = [...new Set([...existingHours.hours, ...validHours])];
+
+        // إذا لم يتم إضافة ساعات جديدة، الرد برسالة
+        if (combinedHours.length === existingHours.hours.length) {
+            return res.status(200).json({
+                message: "تم تحديث ساعات العمل، ولا توجد ساعات جديدة مضافة حيث أن الأوقات كانت مكررة."
+            });
+        }
+
+        existingHours.hours = combinedHours;
         await existingHours.save();
-        return res.status(200).json({ message: "تم تحديث ساعات العمل بنجاح." });
+        return res.status(200).json({ message: "تم تحديث ساعات العمل بنجاح.", data: existingHours });
     }
 
+    // إنشاء سجل جديد إذا لم تكن هناك ساعات مسجلة لليوم
     const workingHours = new WorkingHoursModel({ dayOfWeek, hours: validHours });
     await workingHours.save();
-    res.status(201).json({ message: "تم إضافة ساعات العمل بنجاح." });
+    res.status(201).json({ message: "تم إضافة ساعات العمل بنجاح.", data: workingHours });
 });
+
+// الحصول على اوقات العمل
+exports.getWorkingHours = asyncHandler(async (req, res, next) => {
+    try {
+        // خريطة لأسماء الأيام
+        const dayNames = {
+            0: "الأحد",
+            1: "الإثنين",
+            2: "الثلاثاء",
+            3: "الأربعاء",
+            4: "الخميس",
+            5: "الجمعة",
+            6: "السبت"
+        };
+
+        // الحصول على كل الأيام وأوقات العمل من قاعدة البيانات
+        const workingHours = await WorkingHoursModel.find();
+
+        // إذا لم تكن هناك بيانات، إعادة رسالة فارغة
+        if (!workingHours || workingHours.length === 0) {
+            return res.status(200).json({
+                message: "لا توجد أوقات عمل مسجلة.",
+                data: []
+            });
+        }
+
+        // إضافة dayName لكل سجل
+        const workingHoursWithDayNames = workingHours.map(wh => ({
+            ...wh.toObject(), // تحويل المستند إلى كائن JavaScript عادي
+            dayName: dayNames[wh.dayOfWeek] || "غير معروف"
+        }));
+
+        // إعادة البيانات
+        res.status(200).json({
+            totalResults: workingHoursWithDayNames.length,
+            message: "تم الحصول على أوقات العمل بنجاح.",
+            data: workingHoursWithDayNames
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
 
 
 exports.getAvailableDaysWithTimes = async (req, res, next) => {
@@ -379,36 +437,66 @@ const daysOfWeekMap = {
 };
 
 exports.deleteWorkingHours = asyncHandler(async (req, res, next) => {
-    const { dayOfWeek, time } = req.body; // استلام اليوم والوقت من `body`
+    const { dayOfWeek, time } = req.body;
 
-    // تحويل اسم اليوم إلى رقم باستخدام `daysOfWeekMap`
+    console.log("Received dayOfWeek:", dayOfWeek);
     const dayOfWeekNumber = daysOfWeekMap[dayOfWeek];
+    console.log("Mapped dayOfWeekNumber:", dayOfWeekNumber);
+
     if (dayOfWeekNumber === undefined) {
         return next(new ApiError(`Invalid dayOfWeek name: ${dayOfWeek}. Please provide a valid day name in Arabic.`, 400));
     }
 
-    // البحث عن ساعات العمل لهذا اليوم
     const workingHours = await WorkingHoursModel.findOne({ dayOfWeek: dayOfWeekNumber });
+    console.log(`Working hours for day ${dayOfWeek}:`, workingHours);
 
     if (!workingHours) {
         return next(new ApiError(`No working hours found for day: ${dayOfWeek}`, 404));
     }
 
-    // إذا تم تحديد وقت، حذف الوقت المحدد فقط
-    if (time) {
-        workingHours.hours = workingHours.hours.filter(hour => hour !== time);
+    const validateTimeFormat = (time) => {
+        const timeRegex = /^([0-1][0-9]|2[0-3]):([0-5][0-9])\s?(AM|PM)$/;
+        return timeRegex.test(time);
+    };
 
-        // حفظ التعديلات
-        await workingHours.save();
-        return res.status(200).json({ message: `Time ${time} removed from day ${dayOfWeek}` });
+    if (time) {
+        console.log(`Attempting to remove time: ${time} from day: ${dayOfWeek}`);
+        workingHours.hours = workingHours.hours
+            .filter(hour => hour !== time)
+            .filter(validateTimeFormat); // تنظيف القائمة
+
+        console.log("Cleaned hours:", workingHours.hours);
+
+        try {
+            await workingHours.save();
+            console.log(`Time ${time} removed from day ${dayOfWeek}`);
+            return res.status(200).json({ 
+                status: "success",
+                message: `Time ${time} removed from day ${dayOfWeek}` 
+            });
+        } catch (error) {
+            console.error("Error while saving record:", error);
+            return next(new ApiError("Failed to save updated working hours.", 500));
+        }
     }
 
-    // إذا لم يتم تحديد وقت، حذف جميع الأوقات لهذا اليوم
-    workingHours.hours = []; // تعيين القائمة إلى فارغة
-    await workingHours.save();
+    console.log(`Attempting to remove all times for day: ${dayOfWeek}`);
+    workingHours.hours = [];
 
-    return res.status(200).json({ message: `All working hours removed for day ${dayOfWeek}` });
+    try {
+        await workingHours.save();
+        console.log(`All times removed for day ${dayOfWeek}`);
+        return res.status(200).json({
+            status: "success",
+            message: `All working hours removed for day ${dayOfWeek}` 
+        });
+    } catch (error) {
+        console.error("Error while saving record:", error);
+        return next(new ApiError("Failed to save updated working hours.", 500));
+    }
 });
+
+
 
 
 // تحديث ساعات العمل
@@ -422,12 +510,12 @@ exports.updateSpecificWorkingHour = asyncHandler(async (req, res, next) => {
     }
 
     if (!oldTime || !newTime) {
-        return next(new ApiError("oldTime and newTime is required", 400));
+        return next(new ApiError("يجب أن ادراج الوقت القديم والجديد معًا", 400));
     }
 
-    // تحقق من صحة تنسيق الوقت باستخدام regex
+    // تحقق من صحة تنسيق oldTime و newTime باستخدام regex
     const timeFormatRegex = /^(0?[1-9]|1[0-2]):[0-5][0-9]\s?(AM|PM)$/i;
-    if (!timeFormatRegex.test(newTime)) {
+    if (!timeFormatRegex.test(oldTime) || !timeFormatRegex.test(newTime)) {
         return next(new ApiError("تنسيق الوقت غير صالح. يرجى استخدام التنسيق HH:MM AM/PM.", 400));
     }
 
@@ -445,12 +533,21 @@ exports.updateSpecificWorkingHour = asyncHandler(async (req, res, next) => {
         return next(new ApiError(`لم يتم العثور على الوقت ${oldTime} لليوم ${dayOfWeek}.`, 404));
     }
 
+    // التحقق مما إذا كان الوقت الجديد موجوداً بالفعل
+    if (workingHours.hours.includes(newTime)) {
+        return next(new ApiError(`الوقت الجديد ${newTime} موجود بالفعل في قائمة ساعات العمل.`, 400));
+    }
+
     // استبدال الوقت القديم بالوقت الجديد
     workingHours.hours[timeIndex] = newTime;
     await workingHours.save(); // حفظ التعديلات
 
-    res.status(200).json({ message: `تم تحديث الوقت من ${oldTime} إلى ${newTime} لليوم ${dayOfWeek}`, data: workingHours });
+    res.status(200).json({ 
+        message: `تم تحديث الوقت من ${oldTime} إلى ${newTime} لليوم ${dayOfWeek}`, 
+        data: workingHours 
+    });
 });
+
 
 
 
@@ -481,7 +578,7 @@ exports.getForbiddenDay = asyncHandler(async (req, res) => {
 });
 
 // تحديث الأيام المحظورة
-exports.updateForbiddenDays = asyncHandler(async (req, res) => {
+exports.updateForbiddenDays = asyncHandler(async (req, res,next) => {
     const { forbiddenDays } = req.body;
     if (!Array.isArray(forbiddenDays)) {
         return res.status(400).json({ message: "يجب أن تكون العطلات الثابتة مصفوفة []" });
@@ -492,6 +589,34 @@ exports.updateForbiddenDays = asyncHandler(async (req, res) => {
     if (invalidDays.length > 0) {
         return res.status(400).json({ message: `الأيام التالية غير صحيحة: ${invalidDays.join(', ')}` });
     }
+
+  // التحقق من وجود حجوزات في الأيام المحددة كعطلات
+  for (const day of forbiddenDays) {
+    const dayIndex = validDays.indexOf(day); // تحديد الرقم المقابل لليوم
+
+    // إنشاء نسخة جديدة من اليوم الحالي
+    const today = new Date();
+    const startOfDay = new Date(today); // نسخ التاريخ الحالي
+    const endOfDay = new Date(today); // نسخ التاريخ الحالي
+
+    // حساب بداية اليوم
+    startOfDay.setDate(today.getDate() - today.getDay() + dayIndex);
+    startOfDay.setHours(0, 0, 0, 0); // بداية اليوم الساعة 00:00:00
+
+    // حساب نهاية اليوم
+    endOfDay.setDate(today.getDate() - today.getDay() + dayIndex);
+    endOfDay.setHours(23, 59, 59, 999); // نهاية اليوم الساعة 23:59:59
+
+    // البحث عن الحجوزات في هذا اليوم باستخدام النطاق الكامل بين بداية ونهاية اليوم
+    const existingBookings = await Booking.find({
+        date: { $gte: startOfDay, $lte: endOfDay }, // البحث ضمن النطاق الكامل لليوم
+    });
+
+    // إذا كانت هناك حجوزات في هذا اليوم، يتم إرجاع رسالة خطأ
+    if (existingBookings.length > 0) {
+        return next(new ApiError(`لا يمكن إضافة عطلة في يوم ${day} حيث توجد حجوزات بالفعل، برجاء إلغاء المواعيد أولًا`, 400));
+    }
+}
 
     const settings = await settingsModel.findOneAndUpdate(
         {},
@@ -656,8 +781,9 @@ if (!availableTimes.includes(time)) {
 
 
     // 6. إنشاء الحجز الجديد
+    // visitorId: visitorId || uuidv4(), // إذا لم يكن هناك visitorId، يتم توليد واحد جديد
     const newBooking = await Booking.create({
-        visitorId: visitorId || uuidv4(), // إذا لم يكن هناك visitorId، يتم توليد واحد جديد
+        visitorId: req.user ? null : (visitorId || uuidv4()), // تعيين null إذا كان الحجز بواسطة مستخدم مسجل
         userId: req.user ? req.user._id : null,
         userName,
         phoneNumber,
@@ -768,11 +894,30 @@ exports.getSettings = asyncHandler(async (req, res, next) => {
 exports.updateMaintenanceMode = asyncHandler(async (req, res, next) => {
     const { maintenanceMode, maintenanceMessage } = req.body;
 
+    // التحقق من عدد الكلمات وعدد الأحرف
+    if (maintenanceMessage) {
+        const wordCount = maintenanceMessage.trim().split(/\s+/).length; // عد الكلمات
+        const charCount = maintenanceMessage.length; // عد الأحرف
+
+        if (wordCount > 100) {
+            return res.status(400).json({
+                message: "Maintenance message must not exceed 100 words.",
+            });
+        }
+
+        if (charCount > 200) {
+            return res.status(400).json({
+                message: "Maintenance message must not exceed 200 characters.",
+            });
+        }
+    }
+
+    // تحديث الإعدادات في قاعدة البيانات
     const updatedSettings = await settingsModel.findOneAndUpdate(
         {},
         { maintenanceMode, maintenanceMessage },
         { new: true, upsert: true }
-    ).select("maintenanceMode maintenanceMessage");;
+    ).select("maintenanceMode maintenanceMessage");
 
     res.status(200).json({
         message: "Maintenance mode updated successfully",
@@ -780,11 +925,12 @@ exports.updateMaintenanceMode = asyncHandler(async (req, res, next) => {
     });
 });
 
+
 // تحديث نص الأدمن في فورم الحجز
 exports.updateAdminMessage = asyncHandler(async (req, res, next) => {
     const { adminMessage } = req.body;
 
-    if (!adminMessage || adminMessage.length > 200) {
+    if (adminMessage.length > 200) {
         return res.status(400).json({
             message: "Admin message must not exceed 200 characters",
         });
@@ -998,19 +1144,55 @@ exports.getAllBookings = asyncHandler(async (req, res) => {
     const currentTimeInMinutes = currentTimeUTC.getUTCHours() * 60 + currentTimeUTC.getUTCMinutes();
 
     const showExpired = req.query.showExpired === 'true';
+    const showCancelled = req.query.showCancelled === 'true'; // فلتر لإظهار الحجوزات الملغية
     const keyword = req.query.keyword;
     const today = req.query.today === 'true'; // فلترة حجوزات اليوم فقط
+    const filterType = req.query.filterType; // نوع الفلترة (today, thisWeek, thisMonth, specificDay)
+    const specificDate = req.query.specificDate; // تاريخ معين
     const sortBy = req.query.sortBy || 'date'; // حقل الفرز الافتراضي هو `date`
     const order = req.query.order === 'desc' ? -1 : 1; // الترتيب الافتراضي تصاعدي (asc)
 
     // إعداد التصفية الأساسية للحجوزات
-    let filter = { isCancelled: false };
+    let filter = {};
 
-    // إذا طلب عرض حجوزات اليوم فقط
-    if (today) {
+    // التحقق من إظهار الحجوزات الملغية
+    if (showCancelled) {
+        filter.isCancelled = true; // تضمين الحجوزات الملغية فقط
+    } else {
+        filter.isCancelled = false; // استبعاد الحجوزات الملغية
+    }
+
+    // الفلاتر الخاصة بـ filterType
+    if (filterType === 'today' || today) {
         filter.date = {
             $gte: new Date(currentDateUTC),
             $lt: new Date(currentDateUTC + 'T23:59:59.999Z')
+        };
+    } else if (filterType === 'thisWeek') {
+        const startOfWeek = new Date(currentTimeUTC);
+        startOfWeek.setUTCDate(startOfWeek.getUTCDate() - startOfWeek.getUTCDay());
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setUTCDate(startOfWeek.getUTCDate() + 6);
+
+        filter.date = {
+            $gte: startOfWeek,
+            $lt: new Date(endOfWeek.getTime() + 24 * 60 * 60 * 1000)
+        };
+    } else if (filterType === 'thisMonth') {
+        const startOfMonth = new Date(currentTimeUTC);
+        startOfMonth.setUTCDate(1);
+        const endOfMonth = new Date(startOfMonth);
+        endOfMonth.setUTCMonth(startOfMonth.getUTCMonth() + 1);
+
+        filter.date = {
+            $gte: startOfMonth,
+            $lt: endOfMonth
+        };
+    } else if (filterType === 'specificDay' && specificDate) {
+        const date = new Date(specificDate);
+        filter.date = {
+            $gte: date,
+            $lt: new Date(date.getTime() + 24 * 60 * 60 * 1000)
         };
     }
 
@@ -1043,8 +1225,6 @@ exports.getAllBookings = asyncHandler(async (req, res) => {
             ) {
                 booking.isExpired = true;
                 await booking.save();
-                // to ignore validation on old data when get it
-                // await booking.save({ validateBeforeSave: false });
             }
 
             return {
@@ -1054,9 +1234,16 @@ exports.getAllBookings = asyncHandler(async (req, res) => {
         })
     );
 
-    let filteredBookings = showExpired
-        ? allBookings
-        : allBookings.filter(booking => !booking.isExpired);
+    let filteredBookings;
+
+    // إذا كانت الحجوزات الملغية مطلوبة، لا نهتم بـ `isExpired`
+    if (showCancelled) {
+        filteredBookings = allBookings; // عرض كل الحجوزات الملغية سواء منتهية أو سارية
+    } else {
+        filteredBookings = showExpired
+            ? allBookings
+            : allBookings.filter(booking => !booking.isExpired); // فلترة الحجوزات بناءً على حالة `isExpired`
+    }
 
     // تعديل الفرز باستخدام `sortBy` و`order`
     filteredBookings.sort((a, b) => {
@@ -1092,6 +1279,8 @@ exports.getAllBookings = asyncHandler(async (req, res) => {
 
 
 
+
+
 // الحصول على الحجوزات للمستخدم أو الزائر
 exports.getUserOrVisitorBookings = asyncHandler(async (req, res) => {
     const { userId, visitorId, phoneNumber } = req.params; // قراءة من params
@@ -1101,12 +1290,18 @@ exports.getUserOrVisitorBookings = asyncHandler(async (req, res) => {
         return res.status(400).json({ message: 'يجب توفير userId أو visitorId أو phoneNumber' });
     }
 
-    // إنشاء شرط البحث
-    const filter = {
-        ...(userId && { userId, isCancelled: false }),
-        ...(visitorId && { visitorId, isCancelled: false }),
-        ...(phoneNumber && { phoneNumber, isCancelled: false }),
-    };
+
+// قراءة الفلتر المتعلق بالحجوزات الملغاة
+const { canceled } = req.query;
+
+// إنشاء شرط البحث مع دعم الفلتر الخاص بالحجوزات الملغاة
+const filter = {
+    ...(userId && { userId }),
+    ...(visitorId && { visitorId }),
+    ...(phoneNumber && { phoneNumber }),
+    ...(canceled !== undefined && canceled !== '' && { isCancelled: canceled === 'true' }), // نتحقق أن القيمة ليست فارغة أو غير معرفة
+};
+
 
     // إعداد الصفحة والحد الأقصى للنتائج
     const page = parseInt(req.query.page, 10) || 1;
@@ -1138,6 +1333,7 @@ exports.getUserOrVisitorBookings = asyncHandler(async (req, res) => {
         data: bookings,
     });
 });
+
 
 // الحصول على حجز معين لزائر او يوزر معين او الحصول على حجز بال id
 exports.getSpecificBookingByVisitorOrUser = asyncHandler(async (req, res, next) => {
@@ -1202,17 +1398,39 @@ exports.getSpecificBookingByVisitorOrUser = asyncHandler(async (req, res, next) 
 
 
 exports.getAllVisitor = asyncHandler(async (req, res, next) => {
-    // البحث عن الحجوزات حيث لا يوجد userId ولكن يوجد visitorId
+    const { keyword = "", sort = "", page = 1, limit = 10 } = req.query;
+
+    // تحديد متغيرات التصفية والترتيب
+    const matchConditions = {
+        userId: null, // الحجوزات التي لا ترتبط بمستخدم مسجل
+        visitorId: { $exists: true, $ne: null }, // يجب أن يكون visitorId موجودًا
+    };
+
+    // إذا كان هناك كلمة مفتاحية للبحث (بحث حسب الاسم أو الهاتف)
+    if (keyword) {
+        const regex = new RegExp(keyword, "i"); // استخدام تعبير منتظم للبحث الغير حساس لحالة الحروف
+        matchConditions.$or = [
+            { "userName": { $regex: regex } },
+            { "phoneNumber": { $regex: regex } },
+        ];
+    }
+
+    // تحديد الترتيب (تصاعدي أو تنازلي حسب تاريخ الحجز)
+    const sortConditions = sort
+        ? { "date": sort === "createdAt" ? 1 : -1 } // 1 للتصاعدي، -1 للتنازلي
+        : { "date": 1 }; // الافتراضي تصاعدي حسب تاريخ الحجز
+
+    // حساب مقدار الترحيل بناءً على الصفحة والعدد المحدد في الـ query
+    const skip = (page - 1) * limit;
+
+    // استعلام MongoDB مع التصفيه والفرز والتقسيم إلى صفحات
     const visitors = await Booking.aggregate([
         {
-            $match: {
-                userId: null, // الحجوزات التي لا ترتبط بمستخدم مسجل
-                visitorId: { $exists: true, $ne: null }, // يجب أن يكون visitorId موجودًا
-            },
+            $match: matchConditions,  // تطبيق التصفيات
         },
         {
             $group: {
-                _id: "$visitorId", // تجميع بناءً على visitorId
+                _id: "$visitorId", // تجميع الزوار حسب visitorId
                 visitorInfo: { $first: "$$ROOT" }, // الحصول على أول وثيقة تحتوي على تفاصيل الزائر
             },
         },
@@ -1220,21 +1438,58 @@ exports.getAllVisitor = asyncHandler(async (req, res, next) => {
             $project: {
                 _id: 0, // إزالة الحقل _id من الرد النهائي
                 visitorId: "$_id",
-                visitorInfo: {
-                    userName: "$visitorInfo.userName",
-                    phoneNumber: "$visitorInfo.phoneNumber",
+                userName: "$visitorInfo.userName",
+                phoneNumber: "$visitorInfo.phoneNumber",
+                // إضافة تاريخ الحجز بصيغة dd-mm-yyyy داخل visitorInfo
+                bookingDate: {
+                    $dateToString: {
+                        format: "%d-%m-%Y", // التنسيق المطلوب
+                        date: "$visitorInfo.date",  // استخدام تاريخ الحجز
+                    },
                 },
             },
         },
+        {
+            $sort: sortConditions, // ترتيب البيانات حسب تاريخ الحجز
+        },
+        {
+            $skip: skip, // تخطي البيانات السابقة بناءً على الصفحة
+        },
+        {
+            $limit: parseInt(limit), // تحديد عدد العناصر في الصفحة
+        },
     ]);
 
-    // الرد بالزوار
+    // حساب إجمالي عدد الزوار بدون تقسيم الصفحات
+    const totalCount = await Booking.aggregate([
+        {
+            $match: matchConditions, // تطبيق التصفيات
+        },
+        {
+            $group: {
+                _id: "$visitorId", // تجميع الزوار حسب visitorId
+            },
+        },
+        {
+            $count: "totalCount", // حساب العدد الإجمالي
+        },
+    ]);
+
+    const totalPages = totalCount.length > 0 ? Math.ceil(totalCount[0].totalCount / limit) : 0;
+
+    // الرد بالزوار مع التاريخ المحول داخل visitorInfo
     res.status(200).json({
         status: "success",
         results: visitors.length,
+        totalCount: totalCount.length > 0 ? totalCount[0].totalCount : 0,
+        totalPages,
+        currentPage: page,
         data: visitors,
     });
 });
+
+
+
 
 
 
@@ -1244,6 +1499,8 @@ exports.getCancelledAppointment = asyncHandler(async (req, res) => {
     const keyword = req.query.keyword;
     const sortBy = req.query.sortBy || 'date'; // الحقل المستخدم للفرز، افتراضيًا 'date'
     const order = req.query.order === 'desc' ? -1 : 1; // ترتيب الفرز، افتراضيًا تصاعدي (asc)
+    const filterType = req.query.filterType; // اليوم أو الأسبوع أو الشهر
+    const specificDate = req.query.specificDate; // يوم معين
 
     // إعداد التصفية الأساسية للحجوزات الملغية فقط
     let filter = { isCancelled: true };
@@ -1254,6 +1511,47 @@ exports.getCancelledAppointment = asyncHandler(async (req, res) => {
             { userName: new RegExp(keyword, 'i') },
             { phoneNumber: new RegExp(keyword, 'i') }
         ];
+    }
+
+    // الحصول على التاريخ الحالي
+    const now = new Date();
+    const currentDate = new Date(now.toISOString().split("T")[0]); // بداية اليوم الحالي
+
+    // تطبيق فلاتر اليوم/الأسبوع/الشهر/يوم معين
+    if (filterType === 'today') {
+        filter.date = {
+            $gte: currentDate,
+            $lt: new Date(currentDate.getTime() + 24 * 60 * 60 * 1000) // اليوم التالي
+        };
+    } else if (filterType === 'thisWeek') {
+        const startOfWeek = new Date(currentDate);
+        startOfWeek.setDate(currentDate.getDate() - currentDate.getDay()); // بداية الأسبوع
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(startOfWeek.getDate() + 7); // نهاية الأسبوع
+
+        filter.date = {
+            $gte: startOfWeek,
+            $lt: endOfWeek
+        };
+    } else if (filterType === 'thisMonth') {
+        const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1); // بداية الشهر
+        const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1); // بداية الشهر التالي
+
+        filter.date = {
+            $gte: startOfMonth,
+            $lt: endOfMonth
+        };
+    } else if (filterType === 'specificDay' && specificDate) {
+        const specificDay = new Date(specificDate);
+        const startOfDay = new Date(specificDay);
+        startOfDay.setHours(0, 0, 0, 0); // بداية اليوم
+        const endOfDay = new Date(startOfDay);
+        endOfDay.setHours(23, 59, 59, 999); // نهاية اليوم
+
+        filter.date = {
+            $gte: startOfDay,
+            $lt: endOfDay
+        };
     }
 
     // استرجاع جميع الحجوزات الملغية بناءً على الشروط
@@ -1297,6 +1595,7 @@ exports.getCancelledAppointment = asyncHandler(async (req, res) => {
         data: paginatedBookings 
     });
 });
+
 
 
 // دالة لجلب قيمة timezoneOffset

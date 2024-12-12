@@ -34,41 +34,47 @@ exports.signup = asyncHandler ( async (req, res, next)=>{
 // @access   public
 exports.login = asyncHandler(async (req, res, next) => {
     const { email, password, visitorId } = req.body;
-
+  
     // 1- التحقق من وجود المستخدم بالبريد الإلكتروني وكلمة المرور
     const user = await userModel.findOne({ email });
     if (!user || !(await bcrypt.compare(password, user.password))) {
-        return next(new ApiError("Incorrect email or password", 401));
+      return next(new ApiError("Incorrect email or password", 401));
     }
-
+  
     // 2- التحقق من وجود `visitorId` وإلحاق الحجوزات بحساب المستخدم
     let linkedBookingsCount = 0;
     if (visitorId) {
-        const updatedBookings = await Booking.updateMany(
-            { visitorId, userId: null }, // الحجوزات التي تخص الزائر فقط
-            { userId: user._id } // ربطها بحساب المستخدم
-        );
-
-        // التحقق من عدد الحجوزات التي تم تعديلها
-        linkedBookingsCount = updatedBookings.modifiedCount || 0;
-        console.log(`Linked ${linkedBookingsCount} bookings to user ${user._id}`);
+      const updatedBookings = await Booking.updateMany(
+        { visitorId, userId: null }, // الحجوزات التي تخص الزائر فقط
+        { userId: user._id } // ربطها بحساب المستخدم
+      );
+  
+      // التحقق من عدد الحجوزات التي تم تعديلها
+      linkedBookingsCount = updatedBookings.modifiedCount || 0;
+      console.log(`Linked ${linkedBookingsCount} bookings to user ${user._id}`);
     }
-
-    // 3- إنشاء التوكن JWT
-    const token = createToken(user._id);
-
-    // 4- إرسال الرد
-    res.status(200).json({
-        status: "success",
-        message: `Login successful. ${linkedBookingsCount} bookings have been linked to your account.`,
-        user: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-        },
-        token,
-    });
+  
+// 3- جلب جميع الحجوزات المتعلقة بالمستخدم والتي لم يتم إلغاؤها أو انتهاؤها
+const bookings = await Booking.find({
+    userId: user._id, // الحجوزات الخاصة بالمستخدم
+    isCancelled: false, // غير ملغية
+    isExpired: false,   // غير منتهية
 });
+
+
+
+    // 4- إنشاء التوكن JWT
+    const token = createToken(user._id);
+  
+    // 5- إرسال الرد
+    res.status(200).json({
+      status: "success",
+      message: `Login successful. ${linkedBookingsCount} bookings have been linked to your account.`,
+      user,
+      token,
+    });
+  });
+  
 
 
 
