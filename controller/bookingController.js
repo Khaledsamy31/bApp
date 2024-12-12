@@ -99,6 +99,7 @@ exports.addWorkingHours = asyncHandler(async (req, res, next) => {
             message: "بعض الأوقات مكررة أو غير صالحة. يرجى إدخال الأوقات بتنسيق صحيح HH:MM AM/PM."
         });
     }
+    
 
     // البحث عن الساعات الحالية لليوم المحدد
     let existingHours = await WorkingHoursModel.findOne({ dayOfWeek });
@@ -630,6 +631,47 @@ exports.updateForbiddenDays = asyncHandler(async (req, res,next) => {
 exports.createBooking = asyncHandler(async (req, res, next) => {
     const { userName, phoneNumber, date, time, type, notes, visitorId } = req.body;
     const timezoneOffset = req.timezoneOffset || 0;
+
+        // التحقق من دور المستخدم
+        const isRoleExempted = (user) => {
+            return user && (user.role === 'admin' || user.role === 'manager');
+        };
+
+        
+        if (isRoleExempted(req.user)) {
+            console.log("Admin or Manager role detected. Skipping previous booking checks.");
+        } else {
+            // التحقق من الحجوزات السابقة
+            const filter = visitorId
+                ? { visitorId, isCancelled: false } // البحث عن الحجوزات السابقة للزائر
+                : req.user
+                ? { userId: req.user._id, isCancelled: false } // البحث عن الحجوزات السابقة للمستخدم
+                : null;
+    
+            if (filter) {
+                const latestBooking = await Booking.findOne(filter).sort({ date: -1, time: -1 }).lean();
+                if (latestBooking) {
+                    const lastBookingDate = new Date(latestBooking.date);
+                    const [lastTimePart, lastPeriod] = latestBooking.time.split(" ");
+                    let [lastHours, lastMinutes] = lastTimePart.split(":").map(Number);
+                    if (lastPeriod === "PM" && lastHours < 12) lastHours += 12;
+                    if (lastPeriod === "AM" && lastHours === 12) lastHours = 0;
+                    lastBookingDate.setUTCHours(lastHours, lastMinutes, 0, 0);
+    
+                    const bookingDate = new Date(date);
+                    const [timePart, period] = time.split(" ");
+                    let [hours, minutes] = timePart.split(":").map(Number);
+                    if (period === "PM" && hours < 12) hours += 12;
+                    if (period === "AM" && hours === 12) hours = 0;
+                    bookingDate.setUTCHours(hours, minutes, 0, 0);
+    
+                    if (lastBookingDate.toDateString() === bookingDate.toDateString() && bookingDate <= lastBookingDate) {
+                        console.error("Booking date is before or equal to the latest booking on the same day.");
+                        return next(new ApiError("لا يمكن حجز موعد جديد قبل أو بنفس وقت الحجز السابق في نفس اليوم.", 400));
+                    }
+                }
+            }
+        }
 
         // التحقق من صحة النوع (type) مع إعدادات النظام
         const settingsType = await settingsModel.findOne();
