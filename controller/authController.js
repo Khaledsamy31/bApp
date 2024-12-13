@@ -13,21 +13,30 @@ const Booking = require("../models/bookingModel");
 // @desc     Signup
 // @route    GET /api/v1/auth/signup
 // @access   public
-exports.signup = asyncHandler ( async (req, res, next)=>{
-    //1- Create user
+exports.signup = asyncHandler(async (req, res, next) => {
+    // 1- إنشاء مستخدم جديد
     const user = await userModel.create({
         name: req.body.name,
         email: req.body.email,
         password: req.body.password,
+    });
 
-    })
+    // 2- إزالة كلمة المرور من الاستجابة
+    user.password = undefined;
 
-    //2- Generate token
+    // 3- إنشاء توكن JWT
+    const token = createToken(user._id);
 
-  const token = createToken(user._id)
+    // 4- إرسال الاستجابة
+    res.status(201).json({
+        status: "success",
+        data: {
+            user, // معلومات المستخدم (بدون كلمة المرور)
+        },
+        token, // التوكن الخاص بالمستخدم
+    });
+});
 
-    res.status(201).json({data: user, token})
-})
 
 // @desc     login
 // @route    GET /api/v1/auth/login
@@ -36,7 +45,7 @@ exports.login = asyncHandler(async (req, res, next) => {
     const { email, password, visitorId } = req.body;
   
     // 1- التحقق من وجود المستخدم بالبريد الإلكتروني وكلمة المرور
-    const user = await userModel.findOne({ email });
+    const user = await userModel.findOne({ email }).select('+password');;
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return next(new ApiError("Incorrect email or password", 401));
     }
