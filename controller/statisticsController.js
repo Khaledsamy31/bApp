@@ -208,6 +208,12 @@ const calculateYearlyStats = async (year) => {
   const startOfYear = new Date(year, 0, 1);  // بداية السنة
   const startOfNextYear = new Date(year + 1, 0, 1);  // بداية السنة التالية (لتحديد نطاق البحث)
 
+   // اختبار البيانات يدويًا
+   const bookings = await Booking.find({
+    date: { $gte: startOfYear, $lt: startOfNextYear }
+  });
+  console.log("Bookings found:", bookings);
+
   // استعلام لحساب عدد الحجوزات لكل عميل (سواء مستخدم أو زائر) خلال السنة
   const customersThisYear = await Booking.aggregate([
     {
@@ -289,10 +295,23 @@ const updateYearlyStats = async (year) => {
 
 
 // جدولة لتحديث الإحصائيات السنوية في بداية كل سنة
-cron.schedule('0 0 1 1 *', async () => {  // التحديث في 1 يناير
+// جدولة المهمة السنوية: تشغيل مرة واحدة في السنة في 1 يناير
+cron.schedule('0 0 1 1 *', async () => {  // التحديث في 1 يناير الساعة 00:00
   const currentYear = new Date().getFullYear();
-  await updateYearlyStats(currentYear);  // تحديث الإحصائيات للسنة الحالية
+  await updateYearlyStats(currentYear); // تحديث الإحصائيات السنوية
   console.log(`Yearly statistics updated for year ${currentYear}`);
+});
+
+// جدولة المهمة الشهرية: تشغيل مرة واحدة في بداية كل شهر
+cron.schedule('0 0 1 * *', async () => {  // التحديث في أول يوم من كل شهر الساعة 00:00
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth() + 1; // الشهر الحالي (1-12)
+  console.log(`Monthly check for ${currentMonth}/${currentYear}`);
+
+  // إذا كنت تريد تحديثًا شهريًا مختلفًا، يمكنك كتابة منطق خاص هنا
+  // أو فقط تحديث الإحصائيات السنوية كإجراء إضافي
+  await updateYearlyStats(currentYear);
+  console.log(`Monthly statistics check completed for ${currentMonth}/${currentYear}`);
 });
 
 const updateYearlyStatsOnStartup = async () => {

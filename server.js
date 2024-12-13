@@ -4,6 +4,12 @@ const morgan = require("morgan")
 const path = require("path")
 const cors = require('cors')
 const compression = require('compression')
+const { rateLimit } = require('express-rate-limit') 
+const hpp = require('hpp');
+const mongoSanitize = require('express-mongo-sanitize');
+const { xss } = require('express-xss-sanitizer');
+
+
 // استدعاء ملف المهام المجدولة
 require("./tasks/bookingExpiredFunction"); // <-- هذا السطر
 require('./tasks/updateStats');
@@ -39,13 +45,35 @@ app.use(compression())
 app.use(express.static(path.join(__dirname, "uploads")))
 
 //middleware before route
-app.use(express.json()) //to make parseing for data that comming from postman
+app.use(express.json({limit: "20kb"})) //to make parseing for data that comming from postman
 if(process.env.NODE_ENV === "development"){
 
     app.use(morgan('dev'))
     console.log(`mode: ${process.env.NODE_ENV}`)
 }
 
+// to apply data Sanitization for more protect for nosql query injection
+app.use(mongoSanitize());
+// sanitizes user input data, to protect from scripting and more protect for inputs
+app.use(xss());
+
+
+// Limit each IP to 100 requests per `window` (here, per 15 minutes).
+const limiter = rateLimit({
+	windowMs: 15 * 60 * 1000, // 15 minutes
+	limit: 100, 
+      message:
+    "Too many accounts created from this IP, please try again after an hour"
+
+	// store: ... , // Redis, Memcached, etc. See below.
+})
+
+// Apply the rate limiting middleware to all requests.
+app.use("/api",limiter)
+
+// Express middleware to protect against HTTP Parameter Pollution attacks
+// to allow to use this paramters more than one time with same same name
+app.use(hpp({ whitelist: [ 'date', "time" ] }));
 
 // Mount Routes
 
